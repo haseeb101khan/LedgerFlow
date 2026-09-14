@@ -561,8 +561,8 @@ svg {
 .brand span,
 .product-brand strong,
 .product-brand span,
-.workspace-switcher strong,
-.workspace-switcher span {
+.workspace-switcher > div strong,
+.workspace-switcher > div span {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -578,7 +578,7 @@ svg {
 
 .brand span,
 .product-brand span,
-.workspace-switcher span {
+.workspace-switcher > div span {
   color: var(--sidebar-muted);
   font-size: 12px;
 }
@@ -1924,6 +1924,7 @@ table {
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
   gap: 14px;
 }
 
@@ -2075,6 +2076,410 @@ table {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+
+.setup-modules-fieldset {
+  margin-top: 4px;
+}
+
+.setup-modules-fieldset .muted-note {
+  margin-bottom: 12px;
+}
+
+.module-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  gap: 10px;
+}
+
+.module-choice-grid.compact {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+}
+
+.module-choice {
+  position: relative;
+  min-height: 82px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 13px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.module-choice:hover {
+  border-color: #8bcfbe;
+}
+
+.module-choice:has(input:checked) {
+  background: var(--brand-soft);
+  border-color: var(--brand);
+  box-shadow: 0 0 0 2px var(--brand-ring);
+}
+
+.module-choice input {
+  width: 17px;
+  height: 17px;
+  margin: 2px 0 0;
+  accent-color: var(--brand);
+}
+
+.module-choice strong,
+.module-choice span {
+  display: block;
+}
+
+.module-choice strong {
+  font-size: 13px;
+}
+
+.module-choice span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* ==========================================================================
+   Guided setup and tutorial
+   ========================================================================== */
+
+body.has-blocking-overlay {
+  overflow: hidden;
+}
+
+.setup-wizard-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(11, 27, 41, 0.68);
+}
+
+.setup-wizard {
+  width: min(920px, 100%);
+  max-height: min(780px, calc(100vh - 40px));
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.setup-wizard-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 22px;
+  border-bottom: 1px solid var(--border);
+}
+
+.setup-wizard-head .brand {
+  padding: 0;
+}
+
+.setup-wizard-head .brand span,
+.setup-save-note {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.setup-wizard-progress {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0;
+  margin: 0;
+  padding: 16px 22px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  list-style: none;
+}
+
+.setup-wizard-progress li {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.setup-wizard-progress li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 12px;
+  left: calc(50% + 17px);
+  width: calc(100% - 34px);
+  height: 2px;
+  background: var(--border-strong);
+}
+
+.setup-wizard-progress li.is-done:not(:last-child)::after {
+  background: var(--brand);
+}
+
+.setup-wizard-progress span {
+  position: relative;
+  z-index: 1;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+}
+
+.setup-wizard-progress li.is-current {
+  color: var(--brand-strong);
+}
+
+.setup-wizard-progress li.is-current span,
+.setup-wizard-progress li.is-done span {
+  color: #ffffff;
+  background: var(--brand);
+  border-color: var(--brand);
+}
+
+.setup-wizard-body {
+  min-height: 330px;
+  padding: 26px 30px 30px;
+  overflow-y: auto;
+}
+
+.setup-wizard-copy {
+  margin-bottom: 22px;
+}
+
+.setup-wizard-copy h1 {
+  font-size: 23px;
+}
+
+.setup-wizard-copy p {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.setup-wizard-body .form-error {
+  margin-top: 16px;
+}
+
+.setup-wizard-actions {
+  min-height: 68px;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 22px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.setup-wizard-actions > :first-child {
+  justify-self: start;
+}
+
+.setup-wizard-actions > :last-child {
+  justify-self: end;
+}
+
+.setup-wizard-actions > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.setup-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.setup-choice {
+  position: relative;
+  min-height: 108px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.setup-choice:hover {
+  border-color: #8bcfbe;
+}
+
+.setup-choice:has(input:checked) {
+  background: var(--brand-soft);
+  border-color: var(--brand);
+  box-shadow: 0 0 0 2px var(--brand-ring);
+}
+
+.setup-choice input {
+  margin-top: 3px;
+  accent-color: var(--brand);
+}
+
+.setup-choice strong,
+.setup-choice span {
+  display: block;
+}
+
+.setup-choice span {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.setup-choice-section + .setup-choice-section {
+  margin-top: 24px;
+}
+
+.setup-choice-section h2 {
+  margin-bottom: 10px;
+  font-size: 15px;
+}
+
+.setup-review {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.setup-review > div {
+  min-height: 82px;
+  padding: 14px 16px;
+  background: var(--surface-2);
+}
+
+.setup-review strong,
+.setup-review span {
+  display: block;
+}
+
+.setup-review strong {
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.setup-review span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.setup-ready-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 13px 14px;
+  color: var(--green);
+  background: var(--green-soft);
+  border: 1px solid #abefc6;
+  border-radius: var(--radius-sm);
+}
+
+.setup-ready-note svg {
+  margin-top: 1px;
+}
+
+.tour-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.tour-spotlight {
+  position: fixed;
+  z-index: 101;
+  border: 2px solid #ffffff;
+  border-radius: var(--radius);
+  box-shadow: 0 0 0 9999px rgba(11, 27, 41, 0.72), 0 0 0 5px rgba(7, 134, 111, 0.35);
+  transition: left 180ms ease, top 180ms ease, width 180ms ease, height 180ms ease;
+}
+
+.tour-card {
+  position: fixed;
+  z-index: 102;
+  width: min(360px, calc(100vw - 24px));
+  padding: 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  pointer-events: auto;
+}
+
+.tour-card-head,
+.tour-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tour-step-count {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.tour-icon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  margin: 18px 0 12px;
+  color: var(--brand);
+  background: var(--brand-soft);
+  border-radius: var(--radius-sm);
+}
+
+.tour-card h2 {
+  font-size: 18px;
+}
+
+.tour-card > p {
+  margin: 7px 0 18px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.tour-progress {
+  display: flex;
+  gap: 5px;
+  margin-bottom: 16px;
+}
+
+.tour-progress span {
+  height: 4px;
+  flex: 1;
+  background: var(--surface-3);
+  border-radius: 2px;
+}
+
+.tour-progress span.is-done {
+  background: var(--brand);
 }
 
 /* Modal */
@@ -2810,6 +3215,14 @@ table {
   .model-row {
     grid-template-columns: 1fr;
   }
+
+  .setup-wizard-backdrop {
+    padding: 10px;
+  }
+
+  .setup-wizard {
+    max-height: calc(100vh - 20px);
+  }
 }
 
 @media (max-width: 620px) {
@@ -2867,6 +3280,93 @@ table {
   .topbar-actions .button {
     min-width: 0;
     padding-inline: 10px;
+  }
+
+  .topbar-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) repeat(3, 38px);
+  }
+
+  .topbar-actions .role-switch {
+    width: 100%;
+  }
+
+  .topbar-actions .role-switch > span,
+  .topbar-actions .button-label {
+    display: none;
+  }
+
+  .topbar-actions .role-switch select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .topbar-actions .button {
+    width: 38px;
+    height: 38px;
+    padding: 0;
+  }
+
+  .setup-wizard-backdrop {
+    padding: 0;
+  }
+
+  .setup-wizard {
+    width: 100%;
+    max-height: 100vh;
+    min-height: 100vh;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .setup-wizard-head {
+    padding: 13px 16px;
+  }
+
+  .setup-save-note {
+    display: none;
+  }
+
+  .setup-wizard-progress {
+    padding: 12px 10px;
+  }
+
+  .setup-wizard-progress li {
+    font-size: 9px;
+  }
+
+  .setup-wizard-progress li:not(:last-child)::after {
+    left: calc(50% + 14px);
+    width: calc(100% - 28px);
+  }
+
+  .setup-wizard-progress span {
+    width: 24px;
+    height: 24px;
+  }
+
+  .setup-wizard-body {
+    min-height: 0;
+    padding: 20px 16px 24px;
+  }
+
+  .setup-choice-grid,
+  .setup-review {
+    grid-template-columns: 1fr;
+  }
+
+  .setup-wizard-actions {
+    min-height: 64px;
+    gap: 8px;
+    padding: 12px 16px;
+  }
+
+  .setup-wizard-actions .button {
+    padding-inline: 11px;
+  }
+
+  .tour-card {
+    width: calc(100vw - 20px);
   }
 }
 

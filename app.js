@@ -5,6 +5,30 @@ const SHEETJS_URL = "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.
 
 const MODULES = ["inventory", "finance", "contacts", "employees", "assets"];
 
+const MODULE_GUIDANCE = {
+  inventory: "Stock levels, product details, costs, and low-stock alerts.",
+  finance: "Income, expenses, payments, dues, and profitability.",
+  contacts: "Customers, suppliers, balances, and contact details.",
+  employees: "Employee records, salaries, logins, and access roles.",
+  assets: "Equipment, vehicles, assignments, value, and maintenance.",
+};
+
+const SETUP_STEPS = ["Business", "Documents", "Work areas", "Starting plan", "Ready"];
+const FISCAL_MONTHS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
 const MONEY_FIELDS = {
   inventory: ["unitCost", "sellPrice"],
   assets: ["value"],
@@ -390,6 +414,12 @@ let importSession = null;
 let editingField = null;
 let sheetJsPromise = null;
 let resizeTimer = null;
+let setupWizardStep = 0;
+let tutorialStep = 0;
+let tutorialSteps = [];
+let tutorialOriginView = "dashboard";
+let tutorialFollowUp = false;
+let tutorialPositionTimer = null;
 
 const byId = (id) => document.getElementById(id);
 
@@ -417,7 +447,9 @@ const els = {
   previewBannerText: byId("previewBannerText"),
   exitPreviewBtn: byId("exitPreviewBtn"),
   quickAddBtn: byId("quickAddBtn"),
+  quickAddLabel: byId("quickAddLabel"),
   exportBtn: byId("exportBtn"),
+  tutorialBtn: byId("tutorialBtn"),
   clearActivityBtn: byId("clearActivityBtn"),
   hideGettingStartedBtn: byId("hideGettingStartedBtn"),
   printReportBtn: byId("printReportBtn"),
@@ -431,6 +463,14 @@ const els = {
   businessTypeSelect: byId("businessTypeSelect"),
   currencyInput: byId("currencyInput"),
   dateFormatSelect: byId("dateFormatSelect"),
+  countryInput: byId("countryInput"),
+  timezoneSelect: byId("timezoneSelect"),
+  fiscalYearStartSelect: byId("fiscalYearStartSelect"),
+  businessPhoneInput: byId("businessPhoneInput"),
+  businessEmailInput: byId("businessEmailInput"),
+  registrationNumberInput: byId("registrationNumberInput"),
+  businessAddressInput: byId("businessAddressInput"),
+  setupModuleChoices: byId("setupModuleChoices"),
   ownerFields: byId("ownerFields"),
   ownerNameInput: byId("ownerNameInput"),
   ownerEmailInput: byId("ownerEmailInput"),
@@ -456,6 +496,25 @@ const els = {
   dataToolsPanel: byId("dataToolsPanel"),
   clearRecordsBtn: byId("clearRecordsBtn"),
   clearSampleBtn: byId("clearSampleBtn"),
+  setupWizardBackdrop: byId("setupWizardBackdrop"),
+  setupWizardProgress: byId("setupWizardProgress"),
+  setupWizardForm: byId("setupWizardForm"),
+  setupWizardContent: byId("setupWizardContent"),
+  setupWizardError: byId("setupWizardError"),
+  setupWizardBackBtn: byId("setupWizardBackBtn"),
+  setupWizardNextBtn: byId("setupWizardNextBtn"),
+  setupWizardStepLabel: byId("setupWizardStepLabel"),
+  tourLayer: byId("tourLayer"),
+  tourSpotlight: byId("tourSpotlight"),
+  tourCard: byId("tourCard"),
+  tourStepCount: byId("tourStepCount"),
+  tourIcon: byId("tourIcon"),
+  tourTitle: byId("tourTitle"),
+  tourText: byId("tourText"),
+  tourProgress: byId("tourProgress"),
+  tourBackBtn: byId("tourBackBtn"),
+  tourNextBtn: byId("tourNextBtn"),
+  skipTutorialBtn: byId("skipTutorialBtn"),
   modalBackdrop: byId("modalBackdrop"),
   closeModalBtn: byId("closeModalBtn"),
   modalTitle: byId("modalTitle"),
@@ -469,8 +528,15 @@ const els = {
 
 function emptyState() {
   return {
-    version: 2,
+    version: 3,
     organization: null,
+    onboarding: {
+      setupCompleted: false,
+      setupStep: 0,
+      startPath: "import",
+      addTeam: false,
+      tutorials: {},
+    },
     roles: defaultRoles(),
     customFields: Object.fromEntries(MODULES.map((module) => [module, []])),
     fieldSettings: Object.fromEntries(MODULES.map((module) => [module, {}])),
@@ -677,7 +743,20 @@ function normalizeLoadedState(loaded) {
   if (next.organization) {
     const type = LEGACY_BUSINESS_TYPES[next.organization.type] || next.organization.type;
     next.organization.type = businessScopes[type] ? type : "General Business";
+    const enabled = Array.isArray(next.organization.enabledModules)
+      ? next.organization.enabledModules.filter((module) => MODULES.includes(module))
+      : [...MODULES];
+    next.organization.enabledModules = enabled.length ? enabled : [...MODULES];
   }
+
+  const onboarding = loaded.onboarding || {};
+  next.onboarding = {
+    setupCompleted: Boolean(onboarding.setupCompleted),
+    setupStep: Math.max(0, Math.min(SETUP_STEPS.length - 1, Number(onboarding.setupStep) || 0)),
+    startPath: ["import", "manual", "sample"].includes(onboarding.startPath) ? onboarding.startPath : "import",
+    addTeam: Boolean(onboarding.addTeam),
+    tutorials: onboarding.tutorials && typeof onboarding.tutorials === "object" ? onboarding.tutorials : {},
+  };
 
   MODULES.forEach((module) => {
     next[module] = Array.isArray(loaded[module]) ? loaded[module] : [];
@@ -881,8 +960,13 @@ function canAccess(permission) {
   return Boolean(currentRole()?.permissions?.[permission]);
 }
 
+function moduleEnabled(module) {
+  const enabled = state.organization?.enabledModules;
+  return !Array.isArray(enabled) || enabled.includes(module);
+}
+
 function can(module, action) {
-  return Boolean(currentRole()?.permissions?.modules?.[module]?.[action]);
+  return moduleEnabled(module) && Boolean(currentRole()?.permissions?.modules?.[module]?.[action]);
 }
 
 function canOpenView(view) {
@@ -911,6 +995,8 @@ function logout() {
   session = null;
   previewRoleId = null;
   importSession = null;
+  tutorialSteps = [];
+  tutorialFollowUp = false;
   saveSession(null);
   closeModal();
   showAuth();
@@ -1313,6 +1399,9 @@ function showAuth() {
   els.appShell.hidden = true;
   els.authScreen.hidden = false;
   els.modalBackdrop.hidden = true;
+  els.setupWizardBackdrop.hidden = true;
+  els.tourLayer.hidden = true;
+  document.body.classList.remove("has-blocking-overlay", "menu-open");
   const registered = isRegistered();
   els.authScreen.classList.toggle("is-login", registered);
   els.registerForm.hidden = registered;
@@ -1343,6 +1432,7 @@ function showApp() {
   els.authScreen.hidden = true;
   els.appShell.hidden = false;
   setView(canOpenView(currentView) ? currentView : "dashboard");
+  window.setTimeout(beginNewUserFlow, 120);
 }
 
 function showAuthError(element, message) {
@@ -1380,6 +1470,11 @@ async function handleRegister(event) {
     type,
     currency,
     dateFormat,
+    country: existing?.country || (currency === "PKR" ? "Pakistan" : ""),
+    timezone: existing?.timezone || (currency === "PKR" ? "Asia/Karachi" : Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"),
+    fiscalYearStart: existing?.fiscalYearStart || "January",
+    businessEmail: existing?.businessEmail || ownerEmail,
+    enabledModules: existing?.enabledModules || [...MODULES],
     ownerName,
     ownerEmail,
     ownerPasswordSalt: salt,
@@ -1439,6 +1534,526 @@ function resetBrowserData() {
     console.warn("Could not clear storage", error);
   }
   window.location.reload();
+}
+
+/* ---------- First-time setup and tutorial ---------- */
+
+function guidedSelectOptions(values, selected) {
+  return values
+    .map((value) => `<option value="${escapeHtml(value)}" ${value === selected ? "selected" : ""}>${escapeHtml(value)}</option>`)
+    .join("");
+}
+
+function timezoneOptions(selected) {
+  const detected = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const values = [
+    selected,
+    detected,
+    "Asia/Karachi",
+    "Asia/Dubai",
+    "Asia/Riyadh",
+    "Asia/Kolkata",
+    "Europe/London",
+    "America/New_York",
+    "America/Los_Angeles",
+    "UTC",
+  ].filter(Boolean);
+  return guidedSelectOptions([...new Set(values)], selected || detected);
+}
+
+function moduleChoicesHtml(selectedModules, inputName = "enabledModule") {
+  const selected = new Set(selectedModules?.length ? selectedModules : MODULES);
+  return MODULES.map(
+    (module) => `
+      <label class="module-choice">
+        <input type="checkbox" name="${inputName}" value="${module}" ${selected.has(module) ? "checked" : ""} />
+        <span>
+          <strong>${escapeHtml(navTitle(module))}</strong>
+          <span>${escapeHtml(MODULE_GUIDANCE[module])}</span>
+        </span>
+      </label>
+    `,
+  ).join("");
+}
+
+function setupChoice({ name, value, selected, title, detail }) {
+  return `
+    <label class="setup-choice">
+      <input type="radio" name="${name}" value="${value}" ${value === selected ? "checked" : ""} />
+      <span>
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(detail)}</span>
+      </span>
+    </label>
+  `;
+}
+
+function showSetupWizardError(message) {
+  els.setupWizardError.textContent = message;
+  els.setupWizardError.hidden = false;
+}
+
+function openSetupWizard() {
+  if (!currentUser()?.isOwner || state.onboarding.setupCompleted) return;
+  setupWizardStep = Math.max(0, Math.min(SETUP_STEPS.length - 1, state.onboarding.setupStep || 0));
+  els.setupWizardBackdrop.hidden = false;
+  document.body.classList.add("has-blocking-overlay");
+  renderSetupWizard();
+}
+
+function renderSetupWizard() {
+  const org = state.organization;
+  const selectedModules = org.enabledModules?.length ? org.enabledModules : MODULES;
+  els.setupWizardError.hidden = true;
+  els.setupWizardProgress.innerHTML = SETUP_STEPS.map(
+    (label, index) => `
+      <li class="${index < setupWizardStep ? "is-done" : index === setupWizardStep ? "is-current" : ""}">
+        <span>${index < setupWizardStep ? "✓" : index + 1}</span>
+        <strong>${escapeHtml(label)}</strong>
+      </li>
+    `,
+  ).join("");
+
+  if (setupWizardStep === 0) {
+    els.setupWizardContent.innerHTML = `
+      <div class="setup-wizard-copy">
+        <h1>Confirm your business basics</h1>
+        <p>These settings keep reports, dates, and money consistent across your workspace.</p>
+      </div>
+      <div class="form-grid">
+        <label class="field full">
+          <span class="field-label">Business name *</span>
+          <input name="businessName" value="${escapeHtml(org.name || "")}" required />
+        </label>
+        <label class="field">
+          <span class="field-label">Business type *</span>
+          <select name="businessType">${guidedSelectOptions(Object.keys(businessScopes), org.type)}</select>
+        </label>
+        <label class="field">
+          <span class="field-label">Country *</span>
+          <input name="country" value="${escapeHtml(org.country || (org.currency === "PKR" ? "Pakistan" : ""))}" required />
+        </label>
+        <label class="field">
+          <span class="field-label">Default currency *</span>
+          <input name="currency" maxlength="3" value="${escapeHtml(org.currency || "PKR")}" required />
+          <small>Use a 3-letter code such as PKR, USD, or AED.</small>
+        </label>
+        <label class="field">
+          <span class="field-label">Time zone *</span>
+          <select name="timezone">${timezoneOptions(org.timezone || (org.currency === "PKR" ? "Asia/Karachi" : ""))}</select>
+        </label>
+        <label class="field">
+          <span class="field-label">Fiscal year starts *</span>
+          <select name="fiscalYearStart">${guidedSelectOptions(FISCAL_MONTHS, org.fiscalYearStart || "January")}</select>
+        </label>
+        <label class="field">
+          <span class="field-label">Dates in your files *</span>
+          <select name="dateFormat">
+            <option value="DMY" ${org.dateFormat === "DMY" ? "selected" : ""}>Day/Month/Year</option>
+            <option value="MDY" ${org.dateFormat === "MDY" ? "selected" : ""}>Month/Day/Year</option>
+          </select>
+        </label>
+      </div>
+    `;
+  } else if (setupWizardStep === 1) {
+    els.setupWizardContent.innerHTML = `
+      <div class="setup-wizard-copy">
+        <h1>Add details for reports and documents</h1>
+        <p>LedgerFlow will use these details on future invoices, exports, and printable reports.</p>
+      </div>
+      <div class="form-grid">
+        <label class="field">
+          <span class="field-label">Business phone *</span>
+          <input name="businessPhone" type="tel" value="${escapeHtml(org.businessPhone || "")}" required />
+        </label>
+        <label class="field">
+          <span class="field-label">Business email</span>
+          <input name="businessEmail" type="email" value="${escapeHtml(org.businessEmail || org.ownerEmail || "")}" />
+        </label>
+        <label class="field full">
+          <span class="field-label">Business address *</span>
+          <textarea name="businessAddress" rows="4" required>${escapeHtml(org.businessAddress || "")}</textarea>
+        </label>
+        <label class="field full">
+          <span class="field-label">Registration / tax number</span>
+          <input name="registrationNumber" value="${escapeHtml(org.registrationNumber || "")}" />
+          <small>Optional. Add your NTN, STRN, company registration, or local tax number when applicable.</small>
+        </label>
+      </div>
+    `;
+  } else if (setupWizardStep === 2) {
+    els.setupWizardContent.innerHTML = `
+      <div class="setup-wizard-copy">
+        <h1>Choose the work areas you need</h1>
+        <p>Your sidebar will stay focused on these areas. You can turn any area on or off later.</p>
+      </div>
+      <div class="module-choice-grid">${moduleChoicesHtml(selectedModules)}</div>
+    `;
+  } else if (setupWizardStep === 3) {
+    const teamChoices = moduleEnabled("employees")
+      ? `
+        <div class="setup-choice-grid">
+          ${setupChoice({ name: "teamPlan", value: "later", selected: state.onboarding.addTeam ? "now" : "later", title: "I will start by myself", detail: "Use the owner account now and add employee logins whenever you are ready." })}
+          ${setupChoice({ name: "teamPlan", value: "now", selected: state.onboarding.addTeam ? "now" : "later", title: "Add an employee next", detail: "Create an employee login and assign a role immediately after the tutorial." })}
+        </div>
+      `
+      : `
+        <input type="hidden" name="teamPlan" value="later" />
+        <div class="setup-ready-note">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>
+          <span>The Employees work area is off, so you will begin with the owner account. You can enable employee access later.</span>
+        </div>
+      `;
+    els.setupWizardContent.innerHTML = `
+      <div class="setup-wizard-copy">
+        <h1>Choose how you want to begin</h1>
+        <p>This only decides where LedgerFlow takes you after the tutorial.</p>
+      </div>
+      <section class="setup-choice-section">
+        <h2>Your existing records</h2>
+        <div class="setup-choice-grid">
+          ${setupChoice({ name: "startPath", value: "import", selected: state.onboarding.startPath, title: "Import my files", detail: "Bring in CSV, Excel, JSON, or tab-separated records with guided field matching." })}
+          ${setupChoice({ name: "startPath", value: "manual", selected: state.onboarding.startPath, title: "Start entering records", detail: "Open your first active work area and create records one at a time." })}
+          ${setupChoice({ name: "startPath", value: "sample", selected: state.onboarding.startPath, title: "Explore sample data", detail: "Load a realistic sample first, then remove it when you are ready for real records." })}
+        </div>
+      </section>
+      <section class="setup-choice-section">
+        <h2>Your team</h2>
+        ${teamChoices}
+      </section>
+    `;
+  } else {
+    const startLabels = {
+      import: "Import existing files",
+      manual: "Enter the first record manually",
+      sample: "Explore with sample data",
+    };
+    els.setupWizardContent.innerHTML = `
+      <div class="setup-wizard-copy">
+        <h1>Your workspace is ready</h1>
+        <p>Review the setup below. Next, a short visual tour will show you where everything lives.</p>
+      </div>
+      <div class="setup-review">
+        <div><strong>Business</strong><span>${escapeHtml(org.name)} · ${escapeHtml(org.type)}</span></div>
+        <div><strong>Location & money</strong><span>${escapeHtml(org.country)} · ${escapeHtml(org.currency)} · ${escapeHtml(org.timezone)}</span></div>
+        <div><strong>Active work areas</strong><span>${escapeHtml(selectedModules.map(navTitle).join(", "))}</span></div>
+        <div><strong>First task</strong><span>${escapeHtml(startLabels[state.onboarding.startPath])}${state.onboarding.addTeam ? " · then add an employee" : ""}</span></div>
+      </div>
+      <div class="setup-ready-note">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>
+        <span>You can change all of these settings later under Setup & Roles.</span>
+      </div>
+    `;
+  }
+
+  els.setupWizardBackBtn.hidden = setupWizardStep === 0;
+  els.setupWizardStepLabel.textContent = `Step ${setupWizardStep + 1} of ${SETUP_STEPS.length}`;
+  els.setupWizardNextBtn.textContent = setupWizardStep === SETUP_STEPS.length - 1 ? "Finish setup" : "Save & continue";
+  const firstInput = els.setupWizardContent.querySelector("input, select, textarea");
+  window.setTimeout(() => firstInput?.focus(), 40);
+}
+
+function captureSetupWizardStep() {
+  const form = new FormData(els.setupWizardForm);
+  const controls = els.setupWizardForm.elements;
+  const org = state.organization;
+
+  if (setupWizardStep === 0) {
+    const name = String(form.get("businessName") || "").trim();
+    const country = String(form.get("country") || "").trim();
+    const currency = String(form.get("currency") || "").trim().toUpperCase();
+    if (!name || !country) {
+      showSetupWizardError("Business name and country are required.");
+      return false;
+    }
+    if (!isValidCurrency(currency)) {
+      showSetupWizardError("Currency must be a 3-letter code such as PKR, USD, or AED.");
+      return false;
+    }
+    const type = String(controls.businessType?.value || "General Business");
+    if (type !== org.type) applyBusinessScope(type, { silent: true });
+    Object.assign(org, {
+      name,
+      type,
+      country,
+      currency,
+      timezone: String(controls.timezone?.value || "UTC"),
+      fiscalYearStart: String(controls.fiscalYearStart?.value || "January"),
+      dateFormat: String(controls.dateFormat?.value || "DMY"),
+    });
+  } else if (setupWizardStep === 1) {
+    const phone = String(form.get("businessPhone") || "").trim();
+    const address = String(form.get("businessAddress") || "").trim();
+    if (!phone || !address) {
+      showSetupWizardError("Business phone and address are required for business documents.");
+      return false;
+    }
+    const emailInput = els.setupWizardForm.elements.businessEmail;
+    if (emailInput?.value && !emailInput.checkValidity()) {
+      showSetupWizardError("Enter a valid business email or leave it blank.");
+      return false;
+    }
+    Object.assign(org, {
+      businessPhone: phone,
+      businessEmail: String(form.get("businessEmail") || "").trim().toLowerCase(),
+      businessAddress: address,
+      registrationNumber: String(form.get("registrationNumber") || "").trim(),
+    });
+  } else if (setupWizardStep === 2) {
+    const enabledModules = form.getAll("enabledModule").filter((module) => MODULES.includes(module));
+    if (!enabledModules.length) {
+      showSetupWizardError("Choose at least one work area to continue.");
+      return false;
+    }
+    org.enabledModules = enabledModules;
+  } else if (setupWizardStep === 3) {
+    const startPath = String(form.get("startPath") || "");
+    const teamPlan = String(form.get("teamPlan") || "");
+    if (!startPath || !teamPlan) {
+      showSetupWizardError("Choose a starting method and a team option.");
+      return false;
+    }
+    state.onboarding.startPath = startPath;
+    state.onboarding.addTeam = teamPlan === "now";
+  }
+
+  return true;
+}
+
+function submitSetupWizard(event) {
+  event.preventDefault();
+  if (!captureSetupWizardStep()) return;
+  if (setupWizardStep < SETUP_STEPS.length - 1) {
+    setupWizardStep += 1;
+    state.onboarding.setupStep = setupWizardStep;
+    saveState();
+    render();
+    renderSetupWizard();
+    return;
+  }
+
+  state.onboarding.setupCompleted = true;
+  state.onboarding.setupStep = SETUP_STEPS.length - 1;
+  addActivity("Initial business setup completed", "setup");
+  saveState();
+  els.setupWizardBackdrop.hidden = true;
+  document.body.classList.remove("has-blocking-overlay");
+  setView("dashboard");
+  startTutorial({ automatic: true, followUp: true });
+}
+
+function previousSetupWizardStep() {
+  if (setupWizardStep <= 0) return;
+  setupWizardStep -= 1;
+  state.onboarding.setupStep = setupWizardStep;
+  saveState();
+  renderSetupWizard();
+}
+
+function beginNewUserFlow() {
+  const user = currentUser();
+  if (!user || !els.modalBackdrop.hidden || !els.tourLayer.hidden || !els.setupWizardBackdrop.hidden) return;
+  if (user.isOwner && !state.onboarding.setupCompleted) {
+    openSetupWizard();
+    return;
+  }
+  if (!state.onboarding.tutorials[user.id]) startTutorial({ automatic: true });
+}
+
+function buildTutorialSteps() {
+  const user = currentUser();
+  const firstModule = MODULES.find((module) => can(module, "view"));
+  const firstAddable = MODULES.find((module) => can(module, "add"));
+  const steps = [
+    {
+      selector: "#dashboardView .page-head",
+      view: "dashboard",
+      icon: "info",
+      title: "Your daily starting point",
+      text: "The dashboard turns your records into totals, trends, dues, alerts, and recent activity. Start here whenever you want the overall picture.",
+    },
+    {
+      selector: "#navList",
+      view: "dashboard",
+      icon: "box",
+      title: "Everything is grouped in the sidebar",
+      text: "Open finance, items, contacts, employees, assets, imports, reports, and settings from here. Each person only sees areas allowed by their role.",
+    },
+  ];
+  if (firstModule) {
+    steps.push({
+      selector: `.nav-item[data-view="${firstModule}"]`,
+      view: "dashboard",
+      icon: firstModule === "finance" ? "wallet" : firstModule === "employees" ? "users" : "box",
+      title: `Open ${navTitle(firstModule)} here`,
+      text: "Each work area has its own overview, filters, alerts, and records. Red counts point to overdue, low-stock, or incomplete information that needs attention.",
+    });
+  }
+  if (firstAddable) {
+    steps.push({
+      selector: "#quickAddBtn",
+      view: "dashboard",
+      icon: "info",
+      title: "Add records from anywhere",
+      text: `Use this shortcut to create a ${recordNoun(firstAddable).toLowerCase()}. Inside each work area, its own add button gives you the same guided form.`,
+    });
+  }
+  if (canOpenView("dataSources")) {
+    steps.push({
+      selector: '.nav-item[data-view="dataSources"]',
+      view: "dashboard",
+      icon: "inbox",
+      title: "Bring in your existing records",
+      text: "Import CSV, Excel, JSON, or tab-separated files. LedgerFlow helps match columns and pauses for any required details that are missing.",
+    });
+  }
+  steps.push({
+    selector: "#sidebarHealthBox",
+    view: "dashboard",
+    icon: "alert",
+    title: "Important work stays visible",
+    text: "This status summarizes items needing attention. Red markers are reserved for overdue, critical, or incomplete records so they are difficult to miss.",
+  });
+  if (user?.isOwner && canOpenView("setup")) {
+    steps.push({
+      selector: '.nav-item[data-view="setup"]',
+      view: "dashboard",
+      icon: "tool",
+      title: "Shape LedgerFlow around your business",
+      text: "In Setup & Roles you can update business details, turn work areas on or off, create staff roles, control permissions, and customize fields.",
+    });
+  }
+  steps.push({
+    selector: "#tutorialBtn",
+    view: "dashboard",
+    icon: "info",
+    title: "Replay this tutorial any time",
+    text: "Use the Tutorial button whenever you need a reminder. It will always explain the controls available to your current login and role.",
+  });
+  return steps;
+}
+
+function startTutorial({ automatic = false, followUp = false } = {}) {
+  if (!currentUser() || !els.setupWizardBackdrop.hidden) return;
+  tutorialSteps = buildTutorialSteps();
+  if (!tutorialSteps.length) return;
+  tutorialStep = 0;
+  tutorialOriginView = currentView;
+  tutorialFollowUp = Boolean(automatic && followUp);
+  els.tourLayer.hidden = false;
+  renderTutorialStep();
+}
+
+function renderTutorialStep() {
+  const step = tutorialSteps[tutorialStep];
+  if (!step) return finishTutorial("completed");
+  if (step.view && currentView !== step.view) setView(step.view);
+
+  els.tourStepCount.textContent = `${tutorialStep + 1} of ${tutorialSteps.length}`;
+  els.tourIcon.innerHTML = ICONS[step.icon] || ICONS.info;
+  els.tourTitle.textContent = step.title;
+  els.tourText.textContent = step.text;
+  els.tourBackBtn.hidden = tutorialStep === 0;
+  els.tourNextBtn.textContent = tutorialStep === tutorialSteps.length - 1 ? "Finish" : "Next";
+  els.tourProgress.innerHTML = tutorialSteps
+    .map((_, index) => `<span class="${index <= tutorialStep ? "is-done" : ""}"></span>`)
+    .join("");
+
+  const target = document.querySelector(step.selector) || document.querySelector(".main-area");
+  const inSidebar = Boolean(target?.closest(".sidebar"));
+  document.body.classList.toggle("menu-open", window.innerWidth <= 900 && inSidebar);
+  els.tourCard.style.opacity = "0";
+  window.clearTimeout(tutorialPositionTimer);
+  tutorialPositionTimer = window.setTimeout(() => positionTutorial(target), inSidebar && window.innerWidth <= 900 ? 220 : 40);
+}
+
+function positionTutorial(target) {
+  if (els.tourLayer.hidden || !target) return;
+  target.scrollIntoView({ block: "nearest", inline: "nearest" });
+  const rect = target.getBoundingClientRect();
+  const pad = 6;
+  const left = Math.max(6, rect.left - pad);
+  const top = Math.max(6, rect.top - pad);
+  const right = Math.min(window.innerWidth - 6, rect.right + pad);
+  const bottom = Math.min(window.innerHeight - 6, rect.bottom + pad);
+  Object.assign(els.tourSpotlight.style, {
+    left: `${left}px`,
+    top: `${top}px`,
+    width: `${Math.max(24, right - left)}px`,
+    height: `${Math.max(24, bottom - top)}px`,
+  });
+
+  const cardWidth = Math.min(360, window.innerWidth - 24);
+  const cardHeight = els.tourCard.offsetHeight;
+  const gap = 14;
+  let cardLeft;
+  let cardTop;
+  if (right + gap + cardWidth <= window.innerWidth - 12) {
+    cardLeft = right + gap;
+    cardTop = Math.min(top, window.innerHeight - cardHeight - 12);
+  } else if (left - gap - cardWidth >= 12) {
+    cardLeft = left - gap - cardWidth;
+    cardTop = Math.min(top, window.innerHeight - cardHeight - 12);
+  } else if (bottom + gap + cardHeight <= window.innerHeight - 12) {
+    cardLeft = Math.min(Math.max(12, left), window.innerWidth - cardWidth - 12);
+    cardTop = bottom + gap;
+  } else {
+    cardLeft = Math.min(Math.max(12, left), window.innerWidth - cardWidth - 12);
+    cardTop = Math.max(12, top - gap - cardHeight);
+  }
+  els.tourCard.style.left = `${Math.max(10, cardLeft)}px`;
+  els.tourCard.style.top = `${Math.max(10, cardTop)}px`;
+  els.tourCard.style.opacity = "1";
+}
+
+function moveTutorial(direction) {
+  const next = tutorialStep + direction;
+  if (next < 0) return;
+  if (next >= tutorialSteps.length) {
+    finishTutorial("completed");
+    return;
+  }
+  tutorialStep = next;
+  renderTutorialStep();
+}
+
+function finishTutorial(status) {
+  const user = currentUser();
+  if (user) {
+    state.onboarding.tutorials[user.id] = { status, completedAt: new Date().toISOString() };
+    saveState();
+  }
+  els.tourLayer.hidden = true;
+  document.body.classList.remove("menu-open");
+  window.clearTimeout(tutorialPositionTimer);
+  if (tutorialFollowUp) {
+    tutorialFollowUp = false;
+    runStartingPlan();
+  } else if (canOpenView(tutorialOriginView)) {
+    setView(tutorialOriginView);
+  }
+}
+
+function runStartingPlan() {
+  if (state.onboarding.addTeam && can("employees", "add")) {
+    setView("employees");
+    window.setTimeout(() => openModal("employees"), 80);
+    return;
+  }
+  if (state.onboarding.startPath === "import" && canOpenView("dataSources")) {
+    setView("dataSources");
+    return;
+  }
+  if (state.onboarding.startPath === "sample" && currentUser()?.isOwner) {
+    const type = SAMPLE_BUSINESSES.includes(state.organization.type) ? state.organization.type : "Utility Store";
+    loadSampleBusiness(type);
+    return;
+  }
+  const module = MODULES.find((entry) => can(entry, "add"));
+  if (module) {
+    setView(module);
+    window.setTimeout(() => openModal(module), 80);
+  }
 }
 
 /* ---------- Navigation and chrome ---------- */
@@ -1573,6 +2188,13 @@ function renderChrome() {
   );
 
   els.sidebarBusinessName.textContent = org.name;
+  byId("workspaceAvatar").textContent =
+    String(org.name || "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((word) => word.charAt(0).toUpperCase())
+      .join("") || "CO";
   byId("sidebarBusinessType").textContent = org.type;
   els.topbarBusiness.textContent = "";
   els.userName.textContent = user.name;
@@ -1600,7 +2222,12 @@ function renderChrome() {
   const target = quickAddTarget();
   // Section pages have their own add button in the page header.
   els.quickAddBtn.hidden = !target || MODULES.includes(currentView);
-  if (target) els.quickAddBtn.textContent = `Add ${recordNoun(target)}`;
+  if (target) {
+    const label = `Add ${recordNoun(target)}`;
+    els.quickAddLabel.textContent = label;
+    els.quickAddBtn.title = label;
+    els.quickAddBtn.setAttribute("aria-label", label);
+  }
   els.clearActivityBtn.hidden = !canAccess("settings");
 }
 
@@ -1653,9 +2280,20 @@ function fillSetupForm() {
   els.businessTypeSelect.value = businessScopes[org.type] ? org.type : "General Business";
   els.currencyInput.value = org.currency || "USD";
   els.dateFormatSelect.value = org.dateFormat || "DMY";
+  els.countryInput.value = org.country || "";
+  if (org.timezone && ![...els.timezoneSelect.options].some((option) => option.value === org.timezone)) {
+    els.timezoneSelect.add(new Option(org.timezone, org.timezone));
+  }
+  els.timezoneSelect.value = org.timezone || "UTC";
+  els.fiscalYearStartSelect.value = org.fiscalYearStart || "January";
+  els.businessPhoneInput.value = org.businessPhone || "";
+  els.businessEmailInput.value = org.businessEmail || "";
+  els.registrationNumberInput.value = org.registrationNumber || "";
+  els.businessAddressInput.value = org.businessAddress || "";
   els.ownerNameInput.value = org.ownerName || "";
   els.ownerEmailInput.value = org.ownerEmail || "";
   els.ownerPasswordInput.value = "";
+  els.setupModuleChoices.innerHTML = moduleChoicesHtml(org.enabledModules || MODULES, "profileEnabledModule");
 }
 
 function renderSetup() {
@@ -1676,8 +2314,8 @@ function launchSteps() {
   const org = state.organization;
   const loginCount = state.employees.filter(employeeCanLogin).length;
   const fieldsCustomized =
-    MODULES.some((module) => state.customFields[module].length) ||
-    MODULES.some((module) => Object.keys(state.fieldSettings[module] || {}).length);
+    MODULES.some((module) => moduleEnabled(module) && state.customFields[module].length) ||
+    MODULES.some((module) => moduleEnabled(module) && Object.keys(state.fieldSettings[module] || {}).length);
   return [
     {
       label: "Business registered",
@@ -1698,7 +2336,7 @@ function launchSteps() {
       view: "setup",
       action: "Review roles",
     },
-    {
+    moduleEnabled("employees") && {
       label: "Employees can sign in",
       done: loginCount > 0,
       detail: state.employees.length
@@ -1709,13 +2347,13 @@ function launchSteps() {
     },
     {
       label: "Business records added",
-      done: ["inventory", "finance", "contacts", "assets"].some((module) => state[module].length),
+      done: ["inventory", "finance", "contacts", "assets"].some((module) => moduleEnabled(module) && state[module].length),
       detail: "Import your existing files, or start adding records by hand.",
       view: "dataSources",
       action: "Import data",
       recordsStep: true,
     },
-  ];
+  ].filter(Boolean);
 }
 
 function renderSetupChecklist() {
@@ -2140,6 +2778,9 @@ async function saveSetup(event) {
   const isOwner = Boolean(currentUser()?.isOwner);
   const name = els.businessNameInput.value.trim();
   const currency = els.currencyInput.value.trim().toUpperCase();
+  const enabledModules = [...els.setupModuleChoices.querySelectorAll('input[name="profileEnabledModule"]:checked')]
+    .map((input) => input.value)
+    .filter((module) => MODULES.includes(module));
   if (!name) {
     showToast("Business name is required");
     return;
@@ -2148,12 +2789,24 @@ async function saveSetup(event) {
     showToast("Currency must be a 3-letter code like PKR or USD");
     return;
   }
+  if (!enabledModules.length) {
+    showToast("Choose at least one active work area");
+    return;
+  }
 
   const updates = {
     name,
     type: els.businessTypeSelect.value,
     currency,
     dateFormat: els.dateFormatSelect.value,
+    country: els.countryInput.value.trim(),
+    timezone: els.timezoneSelect.value,
+    fiscalYearStart: els.fiscalYearStartSelect.value,
+    businessPhone: els.businessPhoneInput.value.trim(),
+    businessEmail: els.businessEmailInput.value.trim().toLowerCase(),
+    registrationNumber: els.registrationNumberInput.value.trim(),
+    businessAddress: els.businessAddressInput.value.trim(),
+    enabledModules,
   };
 
   if (isOwner) {
@@ -5483,6 +6136,12 @@ function clearAllRecords({ confirmText } = {}) {
 els.registerForm.addEventListener("submit", handleRegister);
 els.loginForm.addEventListener("submit", handleLogin);
 els.resetBrowserBtn.addEventListener("click", resetBrowserData);
+els.setupWizardForm.addEventListener("submit", submitSetupWizard);
+els.setupWizardBackBtn.addEventListener("click", previousSetupWizardStep);
+els.tutorialBtn.addEventListener("click", () => startTutorial());
+els.tourBackBtn.addEventListener("click", () => moveTutorial(-1));
+els.tourNextBtn.addEventListener("click", () => moveTutorial(1));
+els.skipTutorialBtn.addEventListener("click", () => finishTutorial("skipped"));
 els.logoutBtn.addEventListener("click", () => {
   logout();
   showToast("Signed out");
@@ -5738,6 +6397,7 @@ els.printReportBtn.addEventListener("click", () => window.print());
 els.menuToggle.addEventListener("click", () => document.body.classList.toggle("menu-open"));
 window.addEventListener("resize", () => {
   if (!currentUser()) return;
+  if (!els.tourLayer.hidden) renderTutorialStep();
   window.clearTimeout(resizeTimer);
   resizeTimer = window.setTimeout(() => {
     if (currentView === "dashboard" && totalRecordCount()) {
@@ -5748,8 +6408,26 @@ window.addEventListener("resize", () => {
   }, 120);
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !els.modalBackdrop.hidden) closeModal();
+  if (event.key !== "Escape") return;
+  if (!els.tourLayer.hidden) {
+    finishTutorial("skipped");
+    return;
+  }
+  if (!els.modalBackdrop.hidden) closeModal();
 });
+
+document.addEventListener(
+  "scroll",
+  () => {
+    if (els.tourLayer.hidden) return;
+    window.clearTimeout(tutorialPositionTimer);
+    tutorialPositionTimer = window.setTimeout(() => {
+      const step = tutorialSteps[tutorialStep];
+      positionTutorial(document.querySelector(step?.selector) || document.querySelector(".main-area"));
+    }, 30);
+  },
+  true,
+);
 
 if (state.pendingTemplate) {
   delete state.pendingTemplate;

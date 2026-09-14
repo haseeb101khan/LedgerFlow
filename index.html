@@ -128,7 +128,7 @@
           </div>
         </div>
         <div class="workspace-switcher">
-          <span class="workspace-avatar" aria-hidden="true">CO</span>
+          <span class="workspace-avatar" id="workspaceAvatar" aria-hidden="true">CO</span>
           <div>
             <strong id="sidebarBusinessName">Your company</strong>
             <span id="sidebarBusinessType">Business ERP</span>
@@ -221,8 +221,18 @@
               <span>View as</span>
               <select id="previewRoleSelect"></select>
             </label>
-            <button class="button ghost" id="exportBtn" type="button">Export</button>
-            <button class="button primary" id="quickAddBtn" type="button">Add record</button>
+            <button class="button ghost tutorial-button" id="tutorialBtn" type="button" title="Open the LedgerFlow tutorial">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="m10 8 6 4-6 4z" /></svg>
+              <span class="button-label">Tutorial</span>
+            </button>
+            <button class="button ghost" id="exportBtn" type="button" title="Export data">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M4 17v3h16v-3" /></svg>
+              <span class="button-label">Export</span>
+            </button>
+            <button class="button primary" id="quickAddBtn" type="button" title="Add record">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+              <span class="button-label" id="quickAddLabel">Add record</span>
+            </button>
           </div>
         </header>
 
@@ -748,6 +758,56 @@
                           <option value="MDY">Month/Day/Year</option>
                         </select>
                       </div>
+                      <div class="field">
+                        <label for="countryInput">Country</label>
+                        <input id="countryInput" type="text" required />
+                      </div>
+                      <div class="field">
+                        <label for="timezoneSelect">Time zone</label>
+                        <select id="timezoneSelect">
+                          <option value="Asia/Karachi">Asia/Karachi</option>
+                          <option value="Asia/Dubai">Asia/Dubai</option>
+                          <option value="Asia/Riyadh">Asia/Riyadh</option>
+                          <option value="Asia/Kolkata">Asia/Kolkata</option>
+                          <option value="Europe/London">Europe/London</option>
+                          <option value="America/New_York">America/New York</option>
+                          <option value="America/Los_Angeles">America/Los Angeles</option>
+                          <option value="UTC">UTC</option>
+                        </select>
+                      </div>
+                      <div class="field">
+                        <label for="fiscalYearStartSelect">Fiscal year starts</label>
+                        <select id="fiscalYearStartSelect">
+                          <option>January</option>
+                          <option>February</option>
+                          <option>March</option>
+                          <option>April</option>
+                          <option>May</option>
+                          <option>June</option>
+                          <option>July</option>
+                          <option>August</option>
+                          <option>September</option>
+                          <option>October</option>
+                          <option>November</option>
+                          <option>December</option>
+                        </select>
+                      </div>
+                      <div class="field">
+                        <label for="businessPhoneInput">Business phone</label>
+                        <input id="businessPhoneInput" type="tel" required />
+                      </div>
+                      <div class="field">
+                        <label for="businessEmailInput">Business email</label>
+                        <input id="businessEmailInput" type="email" />
+                      </div>
+                      <div class="field">
+                        <label for="registrationNumberInput">Registration / tax number</label>
+                        <input id="registrationNumberInput" type="text" />
+                      </div>
+                      <div class="field full">
+                        <label for="businessAddressInput">Business address</label>
+                        <textarea id="businessAddressInput" rows="3" required></textarea>
+                      </div>
                       <div class="owner-fields" id="ownerFields">
                         <div class="field">
                           <label for="ownerNameInput">Owner name</label>
@@ -762,6 +822,11 @@
                           <input id="ownerPasswordInput" type="password" autocomplete="new-password" minlength="6" placeholder="Leave blank to keep current" />
                         </div>
                       </div>
+                      <fieldset class="form-section full setup-modules-fieldset">
+                        <legend>Active work areas</legend>
+                        <p class="muted-note">Choose what your team uses. Disabled areas can be turned on again at any time.</p>
+                        <div class="module-choice-grid compact" id="setupModuleChoices"></div>
+                      </fieldset>
                     </div>
                     <div class="form-actions">
                       <button class="button primary" type="submit">Save profile</button>
@@ -891,6 +956,51 @@
           </section>
         </div>
       </main>
+    </div>
+
+    <!-- First-time business setup -->
+    <div class="setup-wizard-backdrop" id="setupWizardBackdrop" hidden>
+      <section class="setup-wizard" role="dialog" aria-modal="true" aria-labelledby="setupWizardTitle">
+        <header class="setup-wizard-head">
+          <div class="brand">
+            <div class="brand-mark" aria-hidden="true">LF</div>
+            <div>
+              <strong id="setupWizardTitle">LedgerFlow setup</strong>
+              <span id="setupWizardEyebrow">A few details, then you are ready</span>
+            </div>
+          </div>
+          <span class="setup-save-note">Saved as you continue</span>
+        </header>
+        <ol class="setup-wizard-progress" id="setupWizardProgress" aria-label="Initial setup progress"></ol>
+        <form class="setup-wizard-body" id="setupWizardForm">
+          <div id="setupWizardContent"></div>
+          <div class="form-error" id="setupWizardError" hidden></div>
+        </form>
+        <footer class="setup-wizard-actions">
+          <button class="button ghost" id="setupWizardBackBtn" type="button">Back</button>
+          <span id="setupWizardStepLabel">Step 1 of 5</span>
+          <button class="button primary" id="setupWizardNextBtn" form="setupWizardForm" type="submit">Save & continue</button>
+        </footer>
+      </section>
+    </div>
+
+    <!-- Replayable visual tutorial -->
+    <div class="tour-layer" id="tourLayer" hidden>
+      <div class="tour-spotlight" id="tourSpotlight" aria-hidden="true"></div>
+      <section class="tour-card" id="tourCard" role="dialog" aria-modal="true" aria-labelledby="tourTitle">
+        <div class="tour-card-head">
+          <span class="tour-step-count" id="tourStepCount">1 of 6</span>
+          <button class="link-button" id="skipTutorialBtn" type="button">Skip tutorial</button>
+        </div>
+        <div class="tour-icon" id="tourIcon" aria-hidden="true"></div>
+        <h2 id="tourTitle">Welcome to LedgerFlow</h2>
+        <p id="tourText"></p>
+        <div class="tour-progress" id="tourProgress" aria-hidden="true"></div>
+        <div class="tour-actions">
+          <button class="button ghost" id="tourBackBtn" type="button">Back</button>
+          <button class="button primary" id="tourNextBtn" type="button">Next</button>
+        </div>
+      </section>
     </div>
 
     <!-- Record form -->

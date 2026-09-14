@@ -24,6 +24,21 @@ The project now has two tracks:
 - Local browser storage, so the demo persists after refresh
 - Sample CSV files in `samples/`
 
+## First Run: Setup Guide And Tutorial
+
+1. **Register** the business and owner login.
+2. **Setup guide** (required, saved after every step, resumes if the page is closed):
+   business basics (type, country, currency, time zone, fiscal year, date format) →
+   document details (phone, address, tax number) → work areas to switch on →
+   starting plan (import files, enter records, or explore sample data; add staff now or later) → review.
+3. **Visual tutorial** (skippable): a spotlight tour of the dashboard, sidebar, add button,
+   imports, attention status, and setup. It adapts to each login's role, is remembered per
+   user, and can be replayed any time from the **Tutorial** button in the top bar.
+4. LedgerFlow then opens the chosen starting point.
+
+Everything collected in the setup guide can be changed later under **Setup & Roles → Business**.
+Each employee sees their own tutorial the first time they sign in.
+
 ## How To Run
 
 Open `index.html` in a browser. No server or package install is required.
