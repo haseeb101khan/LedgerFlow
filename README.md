@@ -36,6 +36,14 @@ npm start
 
 Then open `http://127.0.0.1:5173`.
 
+## Deploying to Vercel
+
+The current customer-facing MVP is the static application in the repository root.
+In Vercel, set the project Root Directory to the repository root (`.`). The checked-in
+`vercel.json` disables framework auto-detection and serves the root directory without
+a build step. Do not select `apps/api` as the Root Directory; that folder contains the
+future NestJS API and does not serve the browser interface at `/`.
+
 ## Production Foundation
 
 - Architecture decision: `docs/adr/0001-platform-architecture.md`
