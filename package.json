@@ -1,0 +1,16 @@
+{
+  "name": "ledgerflow-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A multi-tenant company intelligence and ERP platform for small and medium businesses.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "start": "node server.js",
+    "prototype": "node server.js",
+    "api:dev": "npm --workspace apps/api run start:dev",
+    "web:dev": "npm --workspace apps/web run dev"
+  }
+}

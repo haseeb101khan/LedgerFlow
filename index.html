@@ -1,0 +1,917 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LedgerFlow ERP</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <!-- Sign in / register -->
+    <div class="auth-screen" id="authScreen" hidden>
+      <div class="auth-card">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">LF</div>
+          <div>
+            <strong>LedgerFlow</strong>
+            <span>Business ERP</span>
+          </div>
+        </div>
+
+        <form class="auth-form onboarding-form" id="registerForm" hidden>
+          <div class="onboarding-progress" aria-label="Setup progress">
+            <div class="progress-step is-current"><span>1</span><strong>Create company</strong></div>
+            <div class="progress-line"></div>
+            <div class="progress-step"><span>2</span><strong>Configure modules</strong></div>
+            <div class="progress-line"></div>
+            <div class="progress-step"><span>3</span><strong>Set up data</strong></div>
+            <div class="progress-line"></div>
+            <div class="progress-step"><span>4</span><strong>Invite team</strong></div>
+          </div>
+          <div class="onboarding-main">
+            <h1>Let's create your company</h1>
+            <p id="registerIntro">This information helps LedgerFlow organize your workspace.</p>
+            <div class="form-error" id="registerError" hidden></div>
+            <div class="form-grid">
+              <div class="field full">
+                <label for="registerBusinessName">Business name *</label>
+                <input id="registerBusinessName" name="businessName" type="text" required />
+              </div>
+              <div class="field">
+                <label for="registerBusinessType">Business type</label>
+                <select id="registerBusinessType" name="businessType" data-business-types></select>
+              </div>
+              <div class="field">
+                <label for="registerCurrency">Default currency</label>
+                <input id="registerCurrency" name="currency" type="text" maxlength="3" value="PKR" required />
+                <small>Use a 3-letter code such as PKR, USD, or AED.</small>
+              </div>
+              <div class="field">
+                <label for="registerDateFormat">Dates in your files</label>
+                <select id="registerDateFormat" name="dateFormat">
+                  <option value="DMY">Day/Month/Year (14/09/2026)</option>
+                  <option value="MDY">Month/Day/Year (09/14/2026)</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="registerOwnerName">Owner name *</label>
+                <input id="registerOwnerName" name="ownerName" type="text" required />
+              </div>
+              <div class="field full">
+                <label for="registerOwnerEmail">Owner login email *</label>
+                <input id="registerOwnerEmail" name="ownerEmail" type="email" autocomplete="username" required />
+              </div>
+              <div class="field">
+                <label for="registerPassword">Password *</label>
+                <input id="registerPassword" name="password" type="password" autocomplete="new-password" minlength="6" required />
+              </div>
+              <div class="field">
+                <label for="registerPasswordConfirm">Confirm password *</label>
+                <input id="registerPasswordConfirm" name="passwordConfirm" type="password" autocomplete="new-password" minlength="6" required />
+              </div>
+            </div>
+            <div class="onboarding-actions">
+              <span>Your records begin empty and private.</span>
+              <button class="button primary" type="submit">Create company</button>
+            </div>
+            <p class="auth-note">Prototype data and logins are stored only in this browser.</p>
+          </div>
+          <aside class="onboarding-aside">
+            <div class="company-illustration" aria-hidden="true">
+              <svg viewBox="0 0 160 110"><path d="M30 48h100v45H30z"/><path d="M22 48 35 25h90l13 23z"/><path d="M68 64h24v29H68z"/><path d="M42 61h16v14H42zM102 61h16v14h-16z"/><path d="M58 25V14h44v11"/></svg>
+            </div>
+            <h2>One place for daily business records</h2>
+            <ul>
+              <li>Manage finance, inventory, assets, and employees</li>
+              <li>Control access for every role</li>
+              <li>Import existing spreadsheets</li>
+              <li>See alerts and reports without formulas</li>
+            </ul>
+            <blockquote>Simple enough to start today. Structured enough to grow with you.</blockquote>
+          </aside>
+        </form>
+
+        <form class="auth-form" id="loginForm" hidden>
+          <h1 id="loginTitle">Sign in</h1>
+          <p>Owners and employees sign in with the login email the owner set up.</p>
+          <div class="form-error" id="loginError" hidden></div>
+          <div class="form-grid single">
+            <div class="field">
+              <label for="loginEmail">Email</label>
+              <input id="loginEmail" name="email" type="email" autocomplete="username" required />
+            </div>
+            <div class="field">
+              <label for="loginPassword">Password</label>
+              <input id="loginPassword" name="password" type="password" autocomplete="current-password" required />
+            </div>
+          </div>
+          <button class="button primary block" type="submit">Sign in</button>
+          <p class="auth-note">
+            Forgot the owner password? In this prototype the only option is to
+            <button class="link-button danger" id="resetBrowserBtn" type="button">erase this browser's business data</button>.
+          </p>
+        </form>
+      </div>
+    </div>
+
+    <div class="app-shell" id="appShell" hidden>
+      <!-- Sidebar -->
+      <aside class="sidebar" aria-label="Primary navigation">
+        <div class="product-brand">
+          <div class="brand-mark" aria-hidden="true">LF</div>
+          <div>
+            <strong>LedgerFlow</strong>
+            <span>Business operations</span>
+          </div>
+        </div>
+        <div class="workspace-switcher">
+          <span class="workspace-avatar" aria-hidden="true">CO</span>
+          <div>
+            <strong id="sidebarBusinessName">Your company</strong>
+            <span id="sidebarBusinessType">Business ERP</span>
+          </div>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4" /></svg>
+        </div>
+
+        <nav class="nav-list" id="navList">
+          <button class="nav-item is-active" data-view="dashboard" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z" /></svg>
+            <span>Dashboard</span>
+          </button>
+
+          <p class="nav-group" data-nav-group="business">Business</p>
+          <button class="nav-item" data-view="finance" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="14" rx="2" /><path d="M3 10h18M16 15h2" /></svg>
+            <span data-nav-label>Finance</span>
+            <span class="nav-count" data-nav-count="finance" hidden></span>
+          </button>
+          <button class="nav-item" data-view="inventory" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5z" /><path d="m3 8 9 5 9-5M12 13v8" /></svg>
+            <span data-nav-label>Items</span>
+            <span class="nav-count" data-nav-count="inventory" hidden></span>
+          </button>
+          <button class="nav-item" data-view="contacts" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5" /><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14a5.5 5.5 0 0 1 3.5 6" /></svg>
+            <span data-nav-label>Customers & Suppliers</span>
+          </button>
+          <button class="nav-item" data-view="employees" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2" /><circle cx="12" cy="10" r="3" /><path d="M8 17a4 4 0 0 1 8 0" /></svg>
+            <span data-nav-label>Employees</span>
+            <span class="nav-count" data-nav-count="employees" hidden></span>
+          </button>
+          <button class="nav-item" data-view="assets" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h11v9H3zM14 10h4l3 3v3h-7z" /><circle cx="7" cy="18" r="2" /><circle cx="17" cy="18" r="2" /></svg>
+            <span data-nav-label>Assets</span>
+          </button>
+
+          <p class="nav-group" data-nav-group="tools">Tools</p>
+          <button class="nav-item" data-view="dataSources" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M4 17v3h16v-3" /></svg>
+            <span>Import Data</span>
+          </button>
+          <button class="nav-item" data-view="reports" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></svg>
+            <span>Reports</span>
+          </button>
+
+          <p class="nav-group" data-nav-group="settings">Settings</p>
+          <button class="nav-item" data-view="setup" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1" /></svg>
+            <span>Setup & Roles</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-foot">
+          <div class="health-pill" id="sidebarHealthBox">
+            <span class="health-dot"></span>
+            <div>
+              <strong id="sidebarHealth">Good</strong>
+              <span id="sidebarHealthNote">Nothing urgent right now.</span>
+            </div>
+          </div>
+          <div class="user-card">
+            <span class="user-avatar" id="userAvatar" aria-hidden="true">O</span>
+            <div>
+              <strong id="userName">Owner</strong>
+              <span id="userRole">Owner</span>
+            </div>
+            <button class="icon-button" id="logoutBtn" type="button" title="Sign out" aria-label="Sign out">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4M10 17l5-5-5-5M15 12H3" /></svg>
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main-area">
+        <!-- Top bar -->
+        <header class="topbar">
+          <button class="icon-button menu-toggle" id="menuToggle" type="button" aria-label="Toggle menu">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+          </button>
+          <label class="search-box" for="globalSearch">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+            <input id="globalSearch" type="search" placeholder="Search records in this section" />
+          </label>
+          <span class="topbar-business" id="topbarBusiness"></span>
+          <div class="topbar-actions">
+            <label class="role-switch" for="previewRoleSelect" id="previewSwitch" hidden>
+              <span>View as</span>
+              <select id="previewRoleSelect"></select>
+            </label>
+            <button class="button ghost" id="exportBtn" type="button">Export</button>
+            <button class="button primary" id="quickAddBtn" type="button">Add record</button>
+          </div>
+        </header>
+
+        <div class="content">
+          <div class="banner info" id="previewBanner" hidden>
+            <span id="previewBannerText">You are previewing a role.</span>
+            <button class="button ghost small" id="exitPreviewBtn" type="button">Back to owner view</button>
+          </div>
+          <div class="banner warn" id="sampleBanner" hidden>
+            <span id="sampleBannerText">You are exploring sample data.</span>
+            <button class="button ghost small" id="clearSampleBtn" type="button">Remove sample data</button>
+          </div>
+
+          <!-- Dashboard -->
+          <section class="view is-visible" id="dashboardView">
+            <header class="page-head">
+              <div>
+                <p class="page-kicker" id="welcomeKicker"></p>
+                <h1 id="welcomeTitle">Welcome</h1>
+                <p class="page-sub" id="businessScopeSummary"></p>
+              </div>
+              <div class="page-actions">
+                <button class="button ghost" data-view-link="dataSources" type="button">Import data</button>
+                <button class="button ghost" data-view-link="reports" type="button">Reports</button>
+              </div>
+            </header>
+
+            <section class="panel empty-start" id="emptyStatePanel" hidden>
+              <div class="panel-head">
+                <div>
+                  <h2 id="emptyStateTitle">Your business is ready</h2>
+                  <p id="emptyStateIntro">There are no records yet.</p>
+                </div>
+              </div>
+              <div class="start-options" id="startOptions"></div>
+            </section>
+
+            <section class="panel" id="gettingStartedPanel" hidden>
+              <div class="panel-head">
+                <div>
+                  <h2>Get your business running</h2>
+                  <p>Follow these steps in any order. Everything can be changed later.</p>
+                </div>
+                <button class="link-button" id="hideGettingStartedBtn" type="button">Hide</button>
+              </div>
+              <div class="launch-steps" id="gettingStartedSteps"></div>
+            </section>
+
+            <div class="kpi-grid" id="dashboardMetrics"></div>
+
+            <div class="dash-grid" id="dashPanels">
+              <section class="panel span-2" id="cashFlowPanel">
+                <div class="panel-head">
+                  <div>
+                    <h2>Income vs expenses</h2>
+                    <p id="cashFlowNote">Last 12 months</p>
+                  </div>
+                  <button class="link-button" data-finance-tab="overview" type="button">Open finance</button>
+                </div>
+                <div class="chart-legend">
+                  <span><i class="swatch income"></i>Income</span>
+                  <span><i class="swatch expense"></i>Expenses</span>
+                  <span><i class="swatch profit"></i>Profit</span>
+                </div>
+                <canvas id="cashFlowChart" class="chart-canvas"></canvas>
+              </section>
+
+              <section class="panel" id="duesPanel">
+                <div class="panel-head">
+                  <div>
+                    <h2>Dues</h2>
+                    <p>Money waiting to come in or go out</p>
+                  </div>
+                  <button class="link-button" data-finance-tab="dues" type="button">All dues</button>
+                </div>
+                <div id="duesSummary"></div>
+              </section>
+
+              <section class="panel" id="needsInputPanel">
+                <div class="panel-head">
+                  <div>
+                    <h2>To do</h2>
+                    <p>Things that need your attention</p>
+                  </div>
+                </div>
+                <div class="todo-list" id="needsInputList"></div>
+              </section>
+
+              <section class="panel" id="inventoryMixPanel">
+                <div class="panel-head">
+                  <div>
+                    <h2 id="inventoryMixTitle">Stock mix</h2>
+                    <p id="inventoryMixNote">Stock by category</p>
+                  </div>
+                </div>
+                <canvas id="inventoryChart" class="chart-canvas donut"></canvas>
+                <div class="legend-list" id="inventoryLegend"></div>
+              </section>
+
+              <section class="panel" id="insightsPanel">
+                <div class="panel-head">
+                  <div>
+                    <h2>Business health</h2>
+                    <p>Plain summaries calculated from your records</p>
+                  </div>
+                </div>
+                <div class="insight-list" id="ownerInsights"></div>
+              </section>
+
+              <section class="panel" id="activityPanel">
+                <div class="panel-head">
+                  <div>
+                    <h2>Recent activity</h2>
+                    <p>Latest changes by you and your team</p>
+                  </div>
+                  <button class="link-button" id="clearActivityBtn" type="button">Clear</button>
+                </div>
+                <div class="timeline" id="activityTimeline"></div>
+              </section>
+            </div>
+          </section>
+
+          <!-- Finance -->
+          <section class="view" id="financeView">
+            <header class="page-head">
+              <div>
+                <h1 id="financeTitle">Finance</h1>
+                <p class="page-sub">Income, expenses, profit, and dues in one place</p>
+              </div>
+              <div class="page-actions">
+                <button class="button primary" data-add="finance" type="button">Add transaction</button>
+              </div>
+            </header>
+            <nav class="tabs" id="financeTabs" data-tabs="finance"></nav>
+
+            <div class="tab-panel" data-panel-view="finance" data-panel-tabs="overview">
+              <div class="control-bar">
+                <div class="segmented" role="group" aria-label="Period">
+                  <button type="button" data-finance-period="monthly" class="is-active">Monthly</button>
+                  <button type="button" data-finance-period="annual">Annual</button>
+                </div>
+                <label class="inline-select" id="financeYearControl">
+                  <span>Year</span>
+                  <select id="financeYearSelect"></select>
+                </label>
+                <label class="inline-select" id="financeCurrencyControl" hidden>
+                  <span>Currency</span>
+                  <select id="financeCurrencySelect"></select>
+                </label>
+                <span class="control-note" id="financeOverviewNote"></span>
+              </div>
+              <div class="kpi-grid" id="financeKpis"></div>
+              <div class="split-grid">
+                <section class="panel span-2">
+                  <div class="panel-head">
+                    <div>
+                      <h2 id="financeChartTitle">Monthly income, expenses and profit</h2>
+                      <p>Based on recorded transactions, paid and unpaid</p>
+                    </div>
+                    <div class="chart-legend">
+                      <span><i class="swatch income"></i>Income</span>
+                      <span><i class="swatch expense"></i>Expenses</span>
+                      <span><i class="swatch profit"></i>Profit</span>
+                    </div>
+                  </div>
+                  <canvas id="financeChart" class="chart-canvas tall"></canvas>
+                </section>
+              </div>
+              <div class="split-grid">
+                <section class="panel span-2">
+                  <div class="panel-head">
+                    <div>
+                      <h2 id="financePeriodTableTitle">Month by month</h2>
+                      <p>Click a row to see its transactions</p>
+                    </div>
+                  </div>
+                  <div class="table-wrap flat">
+                    <table class="data-table period-table" id="financePeriodTable"></table>
+                  </div>
+                </section>
+              </div>
+              <div class="split-grid two">
+                <section class="panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>Income by category</h2>
+                      <p id="financeIncomeCategoriesNote"></p>
+                    </div>
+                  </div>
+                  <div class="bar-list" id="financeIncomeCategories"></div>
+                </section>
+                <section class="panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>Expenses by category</h2>
+                      <p id="financeExpenseCategoriesNote"></p>
+                    </div>
+                  </div>
+                  <div class="bar-list" id="financeExpenseCategories"></div>
+                </section>
+              </div>
+            </div>
+
+            <div class="tab-panel" data-panel-view="finance" data-panel-tabs="dues" hidden>
+              <p class="panel-intro">
+                Dues combine unpaid transactions, opening balances of customers and suppliers, and this month's unpaid salaries.
+                Amounts in different currencies are listed separately and never added together.
+              </p>
+              <div class="kpi-grid" id="duesTotals"></div>
+              <div class="split-grid two">
+                <section class="panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>Owed to you</h2>
+                      <p>Customers and others who will pay the business</p>
+                    </div>
+                  </div>
+                  <div class="due-list" id="receivablesList"></div>
+                </section>
+                <section class="panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>You owe</h2>
+                      <p>Suppliers, bills, and staff salaries to pay</p>
+                    </div>
+                  </div>
+                  <div class="due-list" id="payablesList"></div>
+                </section>
+              </div>
+            </div>
+
+            <div class="tab-panel" data-panel-view="finance" data-panel-tabs="income expenses all" hidden>
+              <div class="table-card">
+                <div class="table-toolbar">
+                  <label class="inline-select">
+                    <span>Category</span>
+                    <select id="financeCategoryFilter"></select>
+                  </label>
+                  <label class="inline-select">
+                    <span>Payment</span>
+                    <select id="financeStatusFilter">
+                      <option value="all">All</option>
+                      <option value="paid">Paid</option>
+                      <option value="unpaid">Unpaid</option>
+                    </select>
+                  </label>
+                  <label class="inline-select">
+                    <span>Month</span>
+                    <select id="financeMonthFilter"></select>
+                  </label>
+                  <span class="table-summary" id="financeTableSummary"></span>
+                </div>
+                <div class="table-wrap">
+                  <table class="data-table">
+                    <thead id="financeHead"></thead>
+                    <tbody id="financeTable"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Items / inventory -->
+          <section class="view" id="inventoryView">
+            <header class="page-head">
+              <div>
+                <h1 id="inventoryTitle">Items</h1>
+                <p class="page-sub" id="inventorySub">Stock levels, costs, and prices</p>
+              </div>
+              <div class="page-actions">
+                <button class="button primary" data-add="inventory" type="button">Add item</button>
+              </div>
+            </header>
+            <nav class="tabs" id="inventoryTabs" data-tabs="inventory"></nav>
+            <div class="table-card">
+              <div class="table-toolbar">
+                <label class="inline-select">
+                  <span id="inventoryCategoryLabel">Category</span>
+                  <select id="inventoryCategoryFilter"></select>
+                </label>
+                <span class="table-summary" id="inventoryTableSummary"></span>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead id="inventoryHead"></thead>
+                  <tbody id="inventoryTable"></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <!-- Contacts -->
+          <section class="view" id="contactsView">
+            <header class="page-head">
+              <div>
+                <h1 id="contactsTitle">Customers & Suppliers</h1>
+                <p class="page-sub">People and companies you buy from and sell to</p>
+              </div>
+              <div class="page-actions">
+                <button class="button primary" data-add="contacts" type="button">Add contact</button>
+              </div>
+            </header>
+            <nav class="tabs" id="contactsTabs" data-tabs="contacts"></nav>
+            <div class="table-card">
+              <div class="table-toolbar">
+                <span class="table-summary" id="contactsTableSummary"></span>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead id="contactsHead"></thead>
+                  <tbody id="contactsTable"></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <!-- Employees -->
+          <section class="view" id="employeesView">
+            <header class="page-head">
+              <div>
+                <h1 id="employeesTitle">Employees</h1>
+                <p class="page-sub">Your team, their pay, and what they can access</p>
+              </div>
+              <div class="page-actions">
+                <button class="button primary" data-add="employees" type="button">Add employee</button>
+              </div>
+            </header>
+            <nav class="tabs" id="employeesTabs" data-tabs="employees"></nav>
+
+            <div class="tab-panel" data-panel-view="employees" data-panel-tabs="directory missing">
+              <div class="table-card">
+                <div class="table-toolbar">
+                  <label class="inline-select">
+                    <span>Department</span>
+                    <select id="employeeDepartmentFilter"></select>
+                  </label>
+                  <span class="table-summary" id="employeesTableSummary"></span>
+                </div>
+                <div class="table-wrap">
+                  <table class="data-table">
+                    <thead id="employeesHead"></thead>
+                    <tbody id="employeesTable"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <div class="tab-panel" data-panel-view="employees" data-panel-tabs="payroll" hidden>
+              <div class="control-bar">
+                <label class="inline-select">
+                  <span>Month</span>
+                  <select id="payrollMonthSelect"></select>
+                </label>
+                <span class="control-note">Paying a salary records it as a paid expense in Finance.</span>
+                <button class="button primary small push-right" id="payAllSalariesBtn" type="button">Pay all unpaid</button>
+              </div>
+              <div class="kpi-grid" id="payrollTotals"></div>
+              <div class="table-card">
+                <div class="table-wrap">
+                  <table class="data-table" id="payrollTable"></table>
+                </div>
+              </div>
+            </div>
+
+            <div class="tab-panel" data-panel-view="employees" data-panel-tabs="access" hidden>
+              <p class="panel-intro">
+                Give employees a login email and password, and choose their role. What each role can see is set in
+                <button class="link-button" data-view-link="setup" type="button">Setup & Roles</button>.
+              </p>
+              <div class="table-card">
+                <div class="table-wrap">
+                  <table class="data-table" id="accessTable"></table>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Assets -->
+          <section class="view" id="assetsView">
+            <header class="page-head">
+              <div>
+                <h1 id="assetsTitle">Assets</h1>
+                <p class="page-sub">Equipment, vehicles, and property the business owns</p>
+              </div>
+              <div class="page-actions">
+                <button class="button primary" data-add="assets" type="button">Add asset</button>
+              </div>
+            </header>
+            <nav class="tabs" id="assetsTabs" data-tabs="assets"></nav>
+            <div class="table-card">
+              <div class="table-toolbar">
+                <span class="table-summary" id="assetsTableSummary"></span>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead id="assetsHead"></thead>
+                  <tbody id="assetsTable"></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <!-- Import -->
+          <section class="view" id="dataSourcesView">
+            <header class="page-head">
+              <div>
+                <h1>Import data</h1>
+                <p class="page-sub">Bring in records from spreadsheets and other systems</p>
+              </div>
+              <div class="page-actions">
+                <button class="button ghost" id="sampleCsvBtn" type="button">Download sample CSV</button>
+              </div>
+            </header>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2>Import a file</h2>
+                  <p>CSV, Excel (.xlsx / .xls), JSON, or tab-separated text</p>
+                </div>
+              </div>
+              <div class="import-box">
+                <label class="field">
+                  <span class="field-label">Import into</span>
+                  <select id="importTarget"></select>
+                </label>
+                <label class="file-drop" for="importFileInput">
+                  <strong>Choose a file</strong>
+                  <span id="importFileName">No file selected</span>
+                  <input id="importFileInput" type="file" accept=".csv,.tsv,.txt,.xlsx,.xls,.json" />
+                </label>
+              </div>
+              <div class="import-wizard" id="importWizard"></div>
+            </section>
+
+            <div class="split-grid two">
+              <section class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>Fields in each section</h2>
+                    <p>Columns from your files are matched into these fields</p>
+                  </div>
+                </div>
+                <div class="model-map" id="canonicalModelMap"></div>
+              </section>
+              <section class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>Data sources</h2>
+                    <p>
+                      <span id="sourceCount">0</span> sources ·
+                      <span id="freshSourceCount">0</span> ready ·
+                      <span id="sourceAlertCount">0</span> need attention
+                    </p>
+                  </div>
+                </div>
+                <div class="source-grid" id="sourceCards"></div>
+              </section>
+            </div>
+          </section>
+
+          <!-- Reports -->
+          <section class="view" id="reportsView">
+            <header class="page-head">
+              <div>
+                <h1>Reports</h1>
+                <p class="page-sub">A printable snapshot of the business</p>
+              </div>
+              <div class="page-actions">
+                <button class="button ghost" id="printReportBtn" type="button">Print report</button>
+              </div>
+            </header>
+            <div class="kpi-grid" id="reportCards"></div>
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2>Management snapshot</h2>
+                  <p>A compact view for owners and managers</p>
+                </div>
+              </div>
+              <div class="report-body" id="reportBody"></div>
+            </section>
+          </section>
+
+          <!-- Setup -->
+          <section class="view" id="setupView">
+            <header class="page-head">
+              <div>
+                <h1>Setup & Roles</h1>
+                <p class="page-sub">Business profile, who can do what, and how records are organised</p>
+              </div>
+            </header>
+            <nav class="tabs" id="setupTabs" data-tabs="setup"></nav>
+
+            <div class="tab-panel" data-panel-view="setup" data-panel-tabs="business">
+              <div class="split-grid two">
+                <section class="panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>Business profile</h2>
+                      <p>Used across reports, imports, and new records</p>
+                    </div>
+                  </div>
+                  <form id="setupForm">
+                    <div class="form-grid">
+                      <div class="field">
+                        <label for="businessNameInput">Business name</label>
+                        <input id="businessNameInput" type="text" required />
+                      </div>
+                      <div class="field">
+                        <label for="businessTypeSelect">Business type</label>
+                        <select id="businessTypeSelect" data-business-types></select>
+                      </div>
+                      <div class="field">
+                        <label for="currencyInput">Default currency</label>
+                        <input id="currencyInput" type="text" maxlength="3" required />
+                        <small>Used for new records. Existing records keep their own currency.</small>
+                      </div>
+                      <div class="field">
+                        <label for="dateFormatSelect">Dates in your files</label>
+                        <select id="dateFormatSelect">
+                          <option value="DMY">Day/Month/Year</option>
+                          <option value="MDY">Month/Day/Year</option>
+                        </select>
+                      </div>
+                      <div class="owner-fields" id="ownerFields">
+                        <div class="field">
+                          <label for="ownerNameInput">Owner name</label>
+                          <input id="ownerNameInput" type="text" required />
+                        </div>
+                        <div class="field">
+                          <label for="ownerEmailInput">Owner login email</label>
+                          <input id="ownerEmailInput" type="email" required />
+                        </div>
+                        <div class="field">
+                          <label for="ownerPasswordInput">New owner password</label>
+                          <input id="ownerPasswordInput" type="password" autocomplete="new-password" minlength="6" placeholder="Leave blank to keep current" />
+                        </div>
+                      </div>
+                    </div>
+                    <div class="form-actions">
+                      <button class="button primary" type="submit">Save profile</button>
+                    </div>
+                  </form>
+                </section>
+                <section class="panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>Launch checklist</h2>
+                      <p>Start empty, import files, then complete missing records</p>
+                    </div>
+                  </div>
+                  <div class="checklist" id="setupChecklist"></div>
+                </section>
+              </div>
+            </div>
+
+            <div class="tab-panel" data-panel-view="setup" data-panel-tabs="roles" hidden>
+              <section class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>Create a role</h2>
+                    <p>Anything a role cannot access is hidden from the people who have it.</p>
+                  </div>
+                </div>
+                <div class="role-builder">
+                  <label class="field">
+                    <span class="field-label">Role name</span>
+                    <input id="newRoleName" type="text" placeholder="Cashier, accountant, site supervisor" />
+                  </label>
+                  <label class="field">
+                    <span class="field-label">Description</span>
+                    <input id="newRoleDescription" type="text" placeholder="What this person does" />
+                  </label>
+                  <label class="field">
+                    <span class="field-label">Start from</span>
+                    <select id="newRoleCopyFrom"></select>
+                  </label>
+                  <button class="button primary" id="addRoleBtn" type="button">Create role</button>
+                </div>
+              </section>
+              <div class="role-grid" id="roleCards"></div>
+            </div>
+
+            <div class="tab-panel" data-panel-view="setup" data-panel-tabs="fields" hidden>
+              <section class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>Fields</h2>
+                    <p>Base fields work for every business. Rename them, hide the ones you don't use, or add your own.</p>
+                  </div>
+                  <label class="inline-select">
+                    <span>Section</span>
+                    <select id="fieldModuleSelect">
+                      <option value="finance">Finance</option>
+                      <option value="inventory">Items</option>
+                      <option value="contacts">Customers & Suppliers</option>
+                      <option value="employees">Employees</option>
+                      <option value="assets">Assets</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="fields-layout">
+                  <div class="field-rows" id="fieldList"></div>
+                  <form class="field-editor" id="fieldEditor">
+                    <h3 id="fieldEditorTitle">Add a field</h3>
+                    <label class="field">
+                      <span class="field-label">Field name</span>
+                      <input id="fieldLabelInput" type="text" placeholder="Batch number, size, project site" />
+                    </label>
+                    <label class="field">
+                      <span class="field-label">Type</span>
+                      <select id="fieldTypeInput">
+                        <option value="text">Text</option>
+                        <option value="number">Number</option>
+                        <option value="date">Date</option>
+                        <option value="select">Choice list</option>
+                      </select>
+                    </label>
+                    <label class="field" id="fieldOptionsControl" hidden>
+                      <span class="field-label">Choices (comma separated)</span>
+                      <input id="fieldOptionsInput" type="text" placeholder="Small, Medium, Large" />
+                    </label>
+                    <label class="check-control">
+                      <input id="fieldRequiredInput" type="checkbox" />
+                      <span>Required</span>
+                    </label>
+                    <label class="check-control" id="fieldHiddenControl" hidden>
+                      <input id="fieldHiddenInput" type="checkbox" />
+                      <span>Hide this field</span>
+                    </label>
+                    <p class="muted-note" id="fieldEditorNote" hidden></p>
+                    <div class="button-row">
+                      <button class="button primary" type="submit" id="saveFieldBtn">Add field</button>
+                      <button class="button ghost" type="button" id="cancelFieldEditBtn" hidden>Cancel</button>
+                    </div>
+                  </form>
+                </div>
+              </section>
+            </div>
+
+            <div class="tab-panel" data-panel-view="setup" data-panel-tabs="templates" hidden>
+              <section class="panel" id="dataToolsPanel">
+                <div class="panel-head">
+                  <div>
+                    <h2>Sample data</h2>
+                    <p>Load a realistic sample business to see how LedgerFlow arranges itself. It replaces all current records.</p>
+                  </div>
+                </div>
+                <div class="button-row">
+                  <select class="plain-select" id="setupSampleSelect" data-sample-select aria-label="Sample business"></select>
+                  <button class="button primary" data-load-sample="setupSampleSelect" type="button">Load sample data</button>
+                  <button class="button danger-ghost" id="clearRecordsBtn" type="button">Clear all records</button>
+                </div>
+              </section>
+              <section class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>Business templates</h2>
+                    <p>Arrange section names and fields for a type of business. Applying one never deletes records.</p>
+                  </div>
+                </div>
+                <div class="scope-grid" id="industryScopeCards"></div>
+              </section>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <!-- Record form -->
+    <div class="modal-backdrop" id="modalBackdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <div class="modal-head">
+          <div>
+            <p class="page-kicker" id="modalKicker">Record</p>
+            <h2 id="modalTitle">Add record</h2>
+          </div>
+          <button class="icon-button" id="closeModalBtn" type="button" aria-label="Close">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+          </button>
+        </div>
+        <form id="recordForm" class="record-form"></form>
+      </div>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script src="sample-data.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
