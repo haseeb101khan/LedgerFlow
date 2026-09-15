@@ -3348,6 +3348,130 @@ body.has-blocking-overlay {
   flex-wrap: wrap;
 }
 
+/* Searchable dropdowns */
+.combo {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.combo .combo-native {
+  position: absolute;
+  bottom: 0;
+  left: 12px;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.combo-input,
+.field .combo-input,
+.trade-item .combo-input {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 34px 8px 12px;
+  color: var(--text);
+  background: var(--surface)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23667085' stroke-width='2'%3E%3Ccircle cx='11' cy='11' r='6'/%3E%3Cpath d='m20 20-4.3-4.3'/%3E%3C/svg%3E")
+    no-repeat right 10px center / 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  outline: 0;
+  text-overflow: ellipsis;
+}
+
+.trade-item .combo-input,
+.mapping-table .combo-input,
+.fill-field .combo-input {
+  min-height: 38px;
+  padding-block: 6px;
+}
+
+.combo-input:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 4px var(--brand-ring);
+}
+
+.combo-input::placeholder {
+  color: var(--faint);
+}
+
+.combo.is-disabled .combo-input {
+  color: var(--muted);
+  background-color: var(--surface-3);
+  cursor: not-allowed;
+}
+
+.field.is-missing .combo-input {
+  background-color: var(--amber-soft);
+  border-color: #fec84b;
+}
+
+.combo-list {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  min-width: 220px;
+  max-height: 280px;
+  padding: 4px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+}
+
+.combo-option {
+  padding: 8px 10px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.35;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.combo-option.is-selected {
+  font-weight: 600;
+}
+
+.combo-option.is-active {
+  background: var(--brand-soft);
+}
+
+.combo-option.is-disabled {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+.combo-option mark {
+  color: inherit;
+  background: #fde68a;
+  border-radius: 2px;
+}
+
+.combo-group {
+  padding: 8px 10px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.combo-empty,
+.combo-more {
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 /* Field help, section help, and page guides */
 .field-label-row {
   display: flex;

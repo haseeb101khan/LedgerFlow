@@ -3237,6 +3237,7 @@ function render() {
     renderReports();
     renderTradeReports();
   }
+  refreshSearchableSelects();
   scheduleAutoGuide();
 }
 
@@ -10980,6 +10981,251 @@ byId("muteGuidesBtn").addEventListener("click", () => {
   finishTutorial("skipped");
   showToast("Guides won't open automatically. Use the Guide button on any page.");
 });
+/* ---------- Searchable dropdowns ----------
+ * Every dropdown in a form becomes a type-to-search box: type a few letters and matching
+ * options appear (names, codes, anything in the option text). The original <select> stays in
+ * the form, hidden, so saving, validation, and change handling work exactly as before.
+ */
+
+const COMBO_CONTAINERS = ["#recordForm", "#setupForm", "#setupWizardContent", "#importWizard", "#setupView .role-builder"];
+const COMBO_RENDER_LIMIT = 150;
+
+function comboOptions(select) {
+  return [...select.options].map((option, index) => ({
+    index,
+    value: option.value,
+    label: option.textContent.trim(),
+    group: option.parentElement?.tagName === "OPTGROUP" ? option.parentElement.label : "",
+    disabled: option.disabled,
+  }));
+}
+
+function comboLabel(select) {
+  const option = select.options[select.selectedIndex];
+  return option ? option.textContent.trim() : "";
+}
+
+// An empty first option like "Choose…" or "—" acts as the placeholder, not a value.
+function comboPlaceholderOption(select) {
+  const first = select.options[0];
+  return first && first.value === "" ? first.textContent.trim() : "";
+}
+
+function enhanceSelect(select) {
+  if (select.dataset.combo || select.multiple || select.size > 1) return;
+  select.dataset.combo = "on";
+
+  const wrap = document.createElement("div");
+  wrap.className = "combo";
+  select.parentNode.insertBefore(wrap, select);
+  wrap.appendChild(select);
+  select.classList.add("combo-native");
+  select.tabIndex = -1;
+  select.setAttribute("aria-hidden", "true");
+
+  const listId = `${select.id || select.name || "combo"}-list-${Math.random().toString(36).slice(2, 7)}`;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "combo-input";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.setAttribute("role", "combobox");
+  input.setAttribute("aria-autocomplete", "list");
+  input.setAttribute("aria-expanded", "false");
+  input.setAttribute("aria-controls", listId);
+  const label = select.id ? document.querySelector(`label[for="${CSS.escape(select.id)}"]`) : null;
+  if (label) input.setAttribute("aria-label", label.textContent.replace("*", "").trim());
+  else if (select.getAttribute("aria-label")) input.setAttribute("aria-label", select.getAttribute("aria-label"));
+
+  const list = document.createElement("div");
+  list.className = "combo-list";
+  list.id = listId;
+  list.setAttribute("role", "listbox");
+  list.hidden = true;
+  wrap.append(input, list);
+
+  let matches = [];
+  let active = -1;
+  let typed = false;
+
+  const sync = () => {
+    const placeholder = comboPlaceholderOption(select);
+    const empty = select.value === "" && select.selectedIndex <= 0 && placeholder;
+    input.value = empty ? "" : comboLabel(select);
+    input.placeholder = empty ? placeholder : "Type to search…";
+    input.disabled = select.disabled;
+    wrap.classList.toggle("is-disabled", select.disabled);
+  };
+
+  const close = () => {
+    list.hidden = true;
+    input.setAttribute("aria-expanded", "false");
+    active = -1;
+  };
+
+  const highlight = (index) => {
+    active = index;
+    list.querySelectorAll(".combo-option").forEach((node) => {
+      const on = Number(node.dataset.match) === index;
+      node.classList.toggle("is-active", on);
+      node.setAttribute("aria-selected", String(on));
+      if (on) node.scrollIntoView({ block: "nearest" });
+    });
+  };
+
+  const render = (query) => {
+    const q = query.trim().toLowerCase();
+    const all = comboOptions(select).filter((option) => !(option.value === "" && option.label === comboPlaceholderOption(select) && q));
+    if (!q) {
+      matches = all;
+    } else {
+      const starts = [];
+      const contains = [];
+      all.forEach((option) => {
+        const text = option.label.toLowerCase();
+        if (text.startsWith(q) || text.split(/[\s(·-]+/).some((word) => word.startsWith(q))) starts.push(option);
+        else if (text.includes(q) || option.group.toLowerCase().includes(q)) contains.push(option);
+      });
+      matches = [...starts, ...contains];
+    }
+    const shown = matches.slice(0, COMBO_RENDER_LIMIT);
+    let lastGroup = null;
+    const escapeRe = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const mark = (text) => (q ? escapeHtml(text).replace(new RegExp(`(${escapeRe(escapeHtml(q))})`, "i"), "<mark>$1</mark>") : escapeHtml(text));
+    list.innerHTML = shown.length
+      ? shown
+          .map((option, index) => {
+            const heading = option.group !== lastGroup && option.group ? `<div class="combo-group">${escapeHtml(option.group)}</div>` : "";
+            lastGroup = option.group;
+            return `${heading}<div class="combo-option ${option.value === select.value ? "is-selected" : ""} ${
+              option.disabled ? "is-disabled" : ""
+            }" role="option" data-match="${index}" aria-selected="false">${mark(option.label) || "&nbsp;"}</div>`;
+          })
+          .join("") +
+        (matches.length > shown.length
+          ? `<div class="combo-more">${matches.length - shown.length} more — keep typing to narrow down</div>`
+          : "")
+      : `<div class="combo-empty">No match for "${escapeHtml(query.trim())}"</div>`;
+    list.hidden = false;
+    input.setAttribute("aria-expanded", "true");
+    const selectedIndex = shown.findIndex((option) => option.value === select.value);
+    highlight(q ? (shown.length ? 0 : -1) : selectedIndex);
+  };
+
+  const choose = (option) => {
+    if (!option || option.disabled) return;
+    const changed = select.value !== option.value || select.selectedIndex !== option.index;
+    select.selectedIndex = option.index;
+    typed = false;
+    sync();
+    close();
+    if (changed) {
+      select.dispatchEvent(new Event("input", { bubbles: true }));
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  };
+
+  input.addEventListener("focus", () => {
+    typed = false;
+    input.select();
+  });
+  input.addEventListener("click", () => {
+    if (list.hidden) render("");
+  });
+  input.addEventListener("input", (event) => {
+    event.stopPropagation();
+    typed = true;
+    render(input.value);
+  });
+  input.addEventListener("change", (event) => event.stopPropagation());
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (list.hidden) render(typed ? input.value : "");
+      const count = Math.min(matches.length, COMBO_RENDER_LIMIT);
+      if (!count) return;
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      highlight(active < 0 ? (step > 0 ? 0 : count - 1) : (active + step + count) % count);
+    } else if (event.key === "Enter") {
+      if (!list.hidden) {
+        event.preventDefault();
+        if (active >= 0) choose(matches[active]);
+        else close();
+      }
+    } else if (event.key === "Tab") {
+      // Typing a few letters and pressing Tab picks the best match.
+      if (typed && !list.hidden && active >= 0) choose(matches[active]);
+      else close();
+    } else if (event.key === "Escape") {
+      if (!list.hidden) {
+        event.preventDefault();
+        event.stopPropagation();
+        close();
+        sync();
+      }
+    }
+  });
+  input.addEventListener("blur", () => {
+    window.setTimeout(() => {
+      if (document.activeElement === input) return;
+      close();
+      sync();
+    }, 120);
+  });
+  list.addEventListener("mousedown", (event) => {
+    // Keep focus in the input so blur doesn't close the list before the click lands.
+    event.preventDefault();
+  });
+  list.addEventListener("click", (event) => {
+    const node = event.target.closest(".combo-option");
+    if (node) choose(matches[Number(node.dataset.match)]);
+  });
+  select.addEventListener("change", sync);
+  select.addEventListener("combo-sync", () => {
+    if (document.activeElement !== input) sync();
+  });
+  select.addEventListener("focus", () => input.focus());
+  label?.addEventListener("click", (event) => {
+    event.preventDefault();
+    input.focus();
+  });
+  select.addEventListener("invalid", () => wrap.classList.add("is-invalid"));
+  sync();
+}
+
+function enhanceSelectsIn(root) {
+  if (!root) return;
+  root.querySelectorAll("select").forEach(enhanceSelect);
+}
+
+function initSearchableSelects() {
+  const observer = new MutationObserver((mutations) => {
+    mutations.forEach((mutation) => {
+      // Options replaced inside an enhanced dropdown: refresh its text.
+      if (mutation.target.tagName === "SELECT" && mutation.target.dataset.combo) {
+        mutation.target.dispatchEvent(new Event("combo-sync"));
+      }
+      mutation.addedNodes.forEach((node) => {
+        if (node.nodeType !== 1) return;
+        if (node.tagName === "SELECT") enhanceSelect(node);
+        else enhanceSelectsIn(node);
+      });
+    });
+  });
+  COMBO_CONTAINERS.forEach((selector) => {
+    const root = document.querySelector(selector);
+    if (!root) return;
+    enhanceSelectsIn(root);
+    observer.observe(root, { childList: true, subtree: true });
+  });
+}
+
+// Keep the visible text in step when code sets a dropdown's value directly.
+function refreshSearchableSelects(root = document) {
+  root.querySelectorAll("select[data-combo]").forEach((select) => select.dispatchEvent(new Event("combo-sync")));
+}
+
+initSearchableSelects();
 addGuideButtons();
 document.addEventListener("click", (event) => {
   if (event.target.closest("[data-page-guide]")) {

@@ -44,6 +44,10 @@ Dues, Payments; Employees → Payroll, Pay history) has a short spotlight guide 
 it. It opens automatically the first time each person visits that tab, is remembered per login, and can be replayed
 with the **Guide** button on any page. "Don't open guides automatically" turns the automatic guides off.
 
+**Searchable dropdowns.** Every dropdown in a form (items and customers in sales and purchases, record fields, setup,
+and import column matching) can be typed into: a few letters of a name or code narrow the list, highlighted matches
+appear first, and Enter or Tab picks the best match. Long lists show the first 150 options until you type.
+
 **Field help.** Every form explains each section and field under it. **Hide help** hides the explanations (remembered
 per login); the **?** next to a field still shows its help.
 
