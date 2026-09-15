@@ -449,8 +449,10 @@
 
             <div class="tab-panel" data-panel-view="finance" data-panel-tabs="dues" hidden>
               <p class="panel-intro">
-                Dues combine unpaid transactions, opening balances of customers and suppliers, and this month's unpaid salaries.
-                Amounts in different currencies are listed separately and never added together.
+                Everyone who owes you, and everyone you owe, grouped by person. Use <strong>Receive payment</strong> or
+                <strong>Pay</strong> to settle their unpaid sales, purchases, and opening balances (oldest first). Each payment is
+                written into the sale or purchase, listed under Payments, and gets a receipt. Salaries are paid from
+                Employees → Payroll. Different currencies are never added together.
               </p>
               <div class="kpi-grid" id="duesTotals"></div>
               <div class="split-grid two">
@@ -472,6 +474,32 @@
                   </div>
                   <div class="due-list" id="payablesList"></div>
                 </section>
+              </div>
+            </div>
+
+            <div class="tab-panel" data-panel-view="finance" data-panel-tabs="payments" hidden>
+              <div class="table-card">
+                <div class="table-toolbar">
+                  <label class="inline-select">
+                    <span>Show</span>
+                    <select id="paymentsDirectionFilter">
+                      <option value="all">Money in and out</option>
+                      <option value="in">Money received</option>
+                      <option value="out">Money paid out</option>
+                    </select>
+                  </label>
+                  <label class="inline-select">
+                    <span>Month</span>
+                    <select id="paymentsMonthFilter"></select>
+                  </label>
+                  <span class="table-summary" id="paymentsSummary"></span>
+                </div>
+                <div class="table-wrap">
+                  <table class="data-table">
+                    <thead id="paymentsHead"></thead>
+                    <tbody id="paymentsLedger"></tbody>
+                  </table>
+                </div>
               </div>
             </div>
 
@@ -689,13 +717,28 @@
                   <span>Month</span>
                   <select id="payrollMonthSelect"></select>
                 </label>
-                <span class="control-note">Paying a salary records it as a paid expense in Finance.</span>
+                <span class="control-note">Each salary paid gets a salary slip and is recorded as a Salaries expense in Finance.</span>
                 <button class="button primary small push-right" id="payAllSalariesBtn" type="button">Pay all unpaid</button>
               </div>
               <div class="kpi-grid" id="payrollTotals"></div>
               <div class="table-card">
                 <div class="table-wrap">
                   <table class="data-table" id="payrollTable"></table>
+                </div>
+              </div>
+            </div>
+
+            <div class="tab-panel" data-panel-view="employees" data-panel-tabs="history" hidden>
+              <div class="table-card">
+                <div class="table-toolbar">
+                  <label class="inline-select">
+                    <span>Employee</span>
+                    <select id="payHistoryEmployeeFilter"></select>
+                  </label>
+                  <span class="table-summary" id="payHistorySummary"></span>
+                </div>
+                <div class="table-wrap">
+                  <table class="data-table" id="payHistoryTable"></table>
                 </div>
               </div>
             </div>
@@ -1141,6 +1184,7 @@
         <h2 id="tourTitle">Welcome to LedgerFlow</h2>
         <p id="tourText"></p>
         <div class="tour-progress" id="tourProgress" aria-hidden="true"></div>
+        <button class="link-button tour-mute" id="muteGuidesBtn" type="button" hidden>Don't open guides automatically</button>
         <div class="tour-actions">
           <button class="button ghost" id="tourBackBtn" type="button">Back</button>
           <button class="button primary" id="tourNextBtn" type="button">Next</button>

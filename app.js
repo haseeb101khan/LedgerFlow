@@ -125,7 +125,7 @@ const schemas = {
     title: "Item",
     fields: [
       { name: "name", label: "Item Name", type: "text", required: true, locked: true, section: "Basic info" },
-      { name: "sku", label: "SKU / Code", type: "text", required: true, section: "Basic info" },
+      { name: "sku", label: "SKU / Code", type: "text", autoId: true, section: "Basic info" },
       { name: "category", label: "Category", type: "text", required: true, section: "Basic info" },
       { name: "quantity", label: "Quantity", type: "number", required: true, min: 0, step: "any", locked: true, section: "Stock" },
       { name: "reorderLevel", label: "Reorder Level", type: "number", min: 0, step: "any", section: "Stock" },
@@ -140,7 +140,7 @@ const schemas = {
     title: "Asset",
     fields: [
       { name: "name", label: "Asset Name", type: "text", required: true, locked: true, section: "Basic info" },
-      { name: "code", label: "Asset Code", type: "text", required: true, section: "Basic info" },
+      { name: "code", label: "Asset Code", type: "text", autoId: true, section: "Basic info" },
       {
         name: "condition",
         label: "Condition",
@@ -161,6 +161,7 @@ const schemas = {
     title: "Employee",
     fields: [
       { name: "name", label: "Full Name", type: "text", required: true, locked: true, section: "Personal" },
+      { name: "employeeId", label: "Employee ID", type: "text", autoId: true, section: "Personal" },
       { name: "phone", label: "Phone", type: "text", section: "Personal" },
       { name: "email", label: "Email", type: "email", section: "Personal" },
       { name: "role", label: "Job Title", type: "text", required: true, section: "Job" },
@@ -198,6 +199,7 @@ const schemas = {
       { name: "date", label: "Date", type: "date", required: true, locked: true, section: "Transaction" },
       { name: "category", label: "Category", type: "text", required: true, section: "Transaction", list: "categoryOptions" },
       { name: "description", label: "Description", type: "text", required: true, section: "Transaction" },
+      { name: "reference", label: "Reference / Voucher No.", type: "text", autoId: true, section: "Transaction" },
       { name: "amount", label: "Amount", type: "number", required: true, min: 0, step: "0.01", locked: true, section: "Amount & payment" },
       { ...currencyField, section: "Amount & payment" },
       {
@@ -227,6 +229,7 @@ const schemas = {
     fields: [
       { name: "name", label: "Name", type: "text", required: true, locked: true, section: "Contact" },
       { name: "type", label: "Type", type: "select", options: ["Customer", "Supplier"], required: true, locked: true, section: "Contact" },
+      { name: "code", label: "Contact ID", type: "text", autoId: true, section: "Contact" },
       { name: "phone", label: "Phone", type: "text", section: "Contact" },
       { name: "email", label: "Email", type: "email", section: "Contact" },
       {
@@ -304,6 +307,9 @@ MODULES.forEach((module) => {
 });
 importAliases.finance.party = ["party", "customer", "supplier", "vendor", "payee", "paidto", "receivedfrom", "client"];
 importAliases.finance.dueDate = ["duedate", "due", "paymentdue", "dueon"];
+importAliases.employees.employeeId = ["employeeid", "empid", "employeecode", "empcode", "staffid", "staffno", "employeeno"];
+importAliases.contacts.code = ["contactid", "customerid", "supplierid", "vendorid", "customercode", "suppliercode", "partycode", "accountno"];
+importAliases.finance.reference = ["reference", "ref", "refno", "voucherno", "voucher", "invoiceno", "billno", "receiptno"];
 
 const recommendedImportFields = {
   inventory: ["name", "sku", "category", "quantity", "unitCost", "sellPrice"],
@@ -441,6 +447,7 @@ let tutorialSteps = [];
 let tutorialOriginView = "dashboard";
 let tutorialFollowUp = false;
 let tutorialPositionTimer = null;
+let tutorialMode = { type: "main" };
 
 const byId = (id) => document.getElementById(id);
 
@@ -557,6 +564,9 @@ function emptyState() {
       startPath: "import",
       addTeam: false,
       tutorials: {},
+      tabGuides: {},
+      autoGuidesOff: {},
+      fieldHelpHidden: {},
     },
     roles: defaultRoles(),
     customFields: Object.fromEntries(MODULES.map((module) => [module, []])),
@@ -809,6 +819,10 @@ function normalizeLoadedState(loaded) {
     startPath: ["import", "manual", "sample"].includes(onboarding.startPath) ? onboarding.startPath : "import",
     addTeam: Boolean(onboarding.addTeam),
     tutorials: onboarding.tutorials && typeof onboarding.tutorials === "object" ? onboarding.tutorials : {},
+    // Per-login: page guides already seen, guides switched off, and field help hidden.
+    tabGuides: onboarding.tabGuides && typeof onboarding.tabGuides === "object" ? onboarding.tabGuides : {},
+    autoGuidesOff: onboarding.autoGuidesOff && typeof onboarding.autoGuidesOff === "object" ? onboarding.autoGuidesOff : {},
+    fieldHelpHidden: onboarding.fieldHelpHidden && typeof onboarding.fieldHelpHidden === "object" ? onboarding.fieldHelpHidden : {},
   };
 
   MODULES.forEach((module) => {
@@ -907,12 +921,120 @@ function normalizeLoadedState(loaded) {
     // Document numbers for vouchers, payment receipts, and adjustment notes are never reused.
     voucher: Number(loaded.counters?.voucher) || 0,
     receipt: Number(loaded.counters?.receipt) || 0,
+    paymentOut: Number(loaded.counters?.paymentOut) || 0,
+    salary: Number(loaded.counters?.salary) || 0,
     adjustment: Number(loaded.counters?.adjustment) || 0,
   };
   return next;
 }
 
+/* Automatic IDs: any record saved without its ID gets the next free one, like ITEM-0007. */
+
+const AUTO_ID_FIELDS = { inventory: "sku", assets: "code", employees: "employeeId", contacts: "code", finance: "reference" };
+
+function autoIdPrefix(module, record = {}) {
+  if (module === "inventory") {
+    const noun = String(state?.organization?.recordNouns?.inventory || "Item")
+      .replace(/[^A-Za-z]/g, "")
+      .toUpperCase();
+    return !noun ? "ITEM" : noun.length <= 4 ? noun : noun.slice(0, 3);
+  }
+  if (module === "assets") return "AST";
+  if (module === "employees") return "EMP";
+  if (module === "contacts") return record.type === "Supplier" ? "SUP" : "CUS";
+  return record.type === "Income" ? "RV" : "PV";
+}
+
+function autoIdApplies(module, record) {
+  if (!record || !AUTO_ID_FIELDS[module]) return false;
+  // Finance entries from a sale, purchase, or salary already carry their own number.
+  if (module === "finance" && (record.sourceType || (record.employeeId && record.payrollMonth))) return false;
+  return true;
+}
+
+function autoIdContext(module, excludeId = "") {
+  const field = AUTO_ID_FIELDS[module];
+  const used = new Set(
+    (state[module] || [])
+      .filter((record) => record.id !== excludeId)
+      .map((record) => String(record[field] ?? "").trim().toUpperCase())
+      .filter(Boolean),
+  );
+  return { used, highest: {} };
+}
+
+function generateAutoId(module, record, context, { preview = false } = {}) {
+  const { used, highest } = context;
+  if (module === "finance") {
+    const prefix = autoIdPrefix(module, record);
+    if (record.documentNumber && !used.has(String(record.documentNumber).toUpperCase())) return record.documentNumber;
+    let counter = Number(state.counters?.voucher) || 0;
+    let value;
+    do {
+      counter += 1;
+      value = `${prefix}-${String(counter).padStart(4, "0")}`;
+    } while (used.has(value));
+    if (!preview) state.counters.voucher = counter;
+    return value;
+  }
+  const prefix = autoIdPrefix(module, record);
+  if (highest[prefix] === undefined) {
+    const pattern = new RegExp(`^${prefix}-(\\d+)$`);
+    highest[prefix] = 0;
+    used.forEach((value) => {
+      const match = value.match(pattern);
+      if (match) highest[prefix] = Math.max(highest[prefix], Number(match[1]));
+    });
+  }
+  let next = highest[prefix];
+  let value;
+  do {
+    next += 1;
+    value = `${prefix}-${String(next).padStart(4, "0")}`;
+  } while (used.has(value));
+  if (!preview) highest[prefix] = next;
+  return value;
+}
+
+function assignAutoId(module, record, context = autoIdContext(module, record.id)) {
+  const field = AUTO_ID_FIELDS[module];
+  if (!autoIdApplies(module, record) || !isBlank(record[field])) return false;
+  record[field] = generateAutoId(module, record, context);
+  context.used.add(String(record[field]).toUpperCase());
+  if (module === "finance" && !record.documentNumber) record.documentNumber = record[field];
+  if (module === "inventory") {
+    state.stockMovements?.forEach((move) => {
+      if (move.itemId === record.id && isBlank(move.sku)) move.sku = record[field];
+    });
+  }
+  return true;
+}
+
+function previewAutoId(module, record = {}) {
+  return generateAutoId(module, record, autoIdContext(module, record.id), { preview: true });
+}
+
+function findIdClash(module, record) {
+  const field = AUTO_ID_FIELDS[module];
+  if (!field || isBlank(record[field])) return null;
+  const value = String(record[field]).trim().toUpperCase();
+  return state[module].find((entry) => entry.id !== record.id && String(entry[field] ?? "").trim().toUpperCase() === value) || null;
+}
+
+function fillAutoIds() {
+  if (!state) return;
+  Object.keys(AUTO_ID_FIELDS).forEach((module) => {
+    const records = state[module] || [];
+    const blanks = records.filter((record) => autoIdApplies(module, record) && isBlank(record[AUTO_ID_FIELDS[module]]));
+    if (!blanks.length) return;
+    const context = autoIdContext(module);
+    // Oldest records get the lowest numbers (newest records are kept first in each list).
+    [...blanks].reverse().forEach((record) => assignAutoId(module, record, context));
+  });
+}
+
 function saveState() {
+  fillAutoIds();
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch (error) {
@@ -1098,7 +1220,8 @@ function getFields(module, options = {}) {
     return {
       ...field,
       label: override.label || field.label,
-      required: field.locked ? Boolean(field.required) : Boolean(override.required ?? field.required),
+      // ID fields are never required: a blank one is filled in automatically.
+      required: field.autoId ? false : field.locked ? Boolean(field.required) : Boolean(override.required ?? field.required),
       hidden: field.locked ? false : Boolean(override.hidden),
     };
   });
@@ -1938,6 +2061,765 @@ function previousSetupWizardStep() {
   renderSetupWizard();
 }
 
+/* ---------- Field and section help ----------
+ * Plain explanations shown under each form field and section. New users see them by default;
+ * anyone can hide them, and each field's "?" still shows its own help.
+ */
+
+const FIELD_HELP = {
+  inventory: {
+    name: "The name you and your customers use for this item.",
+    sku: "Your own code or barcode for this item. Leave it blank and LedgerFlow gives it the next free code.",
+    category: "A group such as Grocery, Tablets, or Cement. Used for filters and the stock mix chart.",
+    quantity: "How many you have right now. After saving, stock only changes through sales, purchases, and stock adjustments.",
+    reorderLevel: "When stock falls to this number, the item is flagged as low stock so you can reorder in time.",
+    location: "Where the item is kept, such as a shelf, rack, store room, or site.",
+    unitCost: "What one unit costs you. Purchases update it to the average cost automatically. Only roles allowed to see costs can see it.",
+    sellPrice: "Your normal selling price. It is suggested on each sale, and can be changed per sale.",
+    currency: "The currency the cost and price are in. LedgerFlow never converts or mixes currencies.",
+    notes: "Anything else worth remembering about this item.",
+  },
+  assets: {
+    name: "What the asset is, such as a delivery van, laptop, or generator.",
+    code: "Your tag or serial number for this asset. Leave it blank for an automatic code.",
+    condition: "Active assets are in use. Maintenance and Damaged assets show up under Needs maintenance.",
+    assignedTo: "The person or team responsible for it.",
+    location: "Where the asset is kept or used.",
+    purchaseDate: "When the business got it.",
+    value: "What the asset is worth. Counted in total asset value; hidden from roles that can't see values.",
+    currency: "The currency of the value. It is never converted.",
+    notes: "Warranty, service history, or anything else.",
+  },
+  employees: {
+    name: "The employee's full name as it should appear on salary slips.",
+    employeeId: "Staff number used on salary slips and records. Leave it blank for an automatic ID.",
+    phone: "A number to reach them.",
+    email: "Their personal or work email (separate from the login email below).",
+    role: "Their job title, such as Cashier or Site Engineer.",
+    department: "The team they belong to. Used to filter the employee list.",
+    status: "Active employees are on payroll. Inactive employees are kept for history but not paid.",
+    salary: "Monthly salary. Payroll uses it to show who is unpaid each month.",
+    currency: "The currency the salary is paid in.",
+    loginEmail: "Add this to let the employee sign in. They only see what their access role allows.",
+    loginPassword: "A password for their first sign-in. Share it with them privately.",
+    accessRole: "Decides which sections and actions this employee can use. Roles are set in Setup & Roles.",
+    notes: "Joining date, emergency contact, or anything else.",
+  },
+  finance: {
+    type: "Income is money coming in; Expense is money going out.",
+    date: "The date of the transaction.",
+    category: "A heading such as Rent, Utilities, or Services. Totals by category appear in the Finance overview.",
+    description: "A short line saying what this was for.",
+    reference: "A bill, receipt, or voucher number. Leave it blank to get the next voucher number (RV for income, PV for expenses).",
+    amount: "The full amount of the transaction.",
+    currency: "The currency the amount was recorded in. It is never converted.",
+    status: "Paid if settled. Pending or Overdue if still owed; those appear under Finance → Dues.",
+    dueDate: "When an unpaid amount should be paid. After this date it is marked overdue.",
+    party: "Who paid you or who you paid. Pick a saved contact or type any name.",
+    notes: "Anything else about this transaction.",
+  },
+  contacts: {
+    name: "The person or company name.",
+    type: "Customer if they buy from you, Supplier if you buy from them.",
+    code: "Your account number for this contact. Leave it blank for an automatic ID (CUS- or SUP-).",
+    phone: "A number to reach them. Shown on invoices.",
+    email: "An email address. Shown on invoices.",
+    balance: "What was already owed before you started LedgerFlow. Positive means they owe you; negative means you owe them.",
+    currency: "The currency of the opening balance.",
+    status: "Active contacts are in use. Blocked or Inactive contacts are kept for history.",
+    notes: "Address, payment terms, or anything else.",
+  },
+};
+
+const SECTION_HELP = {
+  "Basic info": "What this record is and how to find it again.",
+  Stock: "How much you have and when to reorder.",
+  Pricing: "What it costs you and what you sell it for.",
+  Assignment: "Who has it and where it is.",
+  Value: "What it is worth.",
+  Personal: "Who this employee is.",
+  Job: "What they do and where they work.",
+  Pay: "What they are paid each month.",
+  "Login & access": "Optional. Lets this employee sign in and controls what they can see.",
+  Transaction: "What happened and when.",
+  "Amount & payment": "How much, and whether it has been paid.",
+  Who: "The other side of the transaction.",
+  Contact: "Who they are and how to reach them.",
+  Account: "Money already owed and account status.",
+  Notes: "Free text for anything else.",
+};
+
+const TRADE_SECTION_HELP = {
+  sale: {
+    party: "Choose a saved customer, add a new one, or leave it as a walk-in. A name is needed if they will pay later.",
+    lines: "Add each item sold with its quantity and price. The list price is suggested and can be changed. Stock goes down when you save.",
+    payment: "Say whether the customer paid in full, paid part, or will pay later. Anything unpaid is added to Finance → Dues.",
+    details: "Optional reference and notes. The sale number (S-0001…) is created automatically.",
+  },
+  purchase: {
+    party: "Choose the supplier or dealer the stock came from, or add a new one.",
+    lines: "Add each item bought with its quantity and cost. Choose + New item for something not in your list yet. Stock goes up when you save.",
+    payment: "Say whether you paid the supplier. Anything unpaid is added to Finance → Dues as money you owe.",
+    details: "The supplier's bill number and notes. The purchase number (P-0001…) is created automatically.",
+  },
+};
+
+function fieldHelpText(module, field) {
+  if (field.help) return field.help;
+  const help = FIELD_HELP[module]?.[field.name];
+  if (help) return help;
+  if (field.custom) return `A field your business added for ${viewTitle(module).toLowerCase()}. Fill it in if it applies.`;
+  return "";
+}
+
+function fieldHelpVisible() {
+  const user = currentUser();
+  return !(user && state.onboarding?.fieldHelpHidden?.[user.id]);
+}
+
+function toggleFieldHelp() {
+  const user = currentUser();
+  if (!user) return;
+  state.onboarding.fieldHelpHidden ||= {};
+  state.onboarding.fieldHelpHidden[user.id] = fieldHelpVisible();
+  saveState();
+  applyFieldHelpVisibility();
+}
+
+function applyFieldHelpVisibility() {
+  const visible = fieldHelpVisible();
+  els.recordForm.classList.toggle("show-help", visible);
+  const button = els.recordForm.querySelector("[data-toggle-field-help]");
+  if (button) button.textContent = visible ? "Hide help" : "Show help";
+}
+
+function formHelpBarHtml(text) {
+  return `
+    <div class="form-help-bar">
+      <span>${escapeHtml(text)}</span>
+      <button class="link-button" type="button" data-toggle-field-help>${fieldHelpVisible() ? "Hide help" : "Show help"}</button>
+    </div>
+  `;
+}
+
+function sectionHelpHtml(text) {
+  return text ? `<p class="section-help">${escapeHtml(text)}</p>` : "";
+}
+
+/* ---------- Page and tab guides ----------
+ * Each page and each tab has a short spotlight guide. It runs automatically the first time a
+ * person opens that tab (remembered per login) and can be replayed with the Guide button.
+ */
+
+function tabButtonSelector(view, tab) {
+  return `#${view}Tabs [data-tab="${view}:${tab}"]`;
+}
+
+function missingInfoGuide(view) {
+  const noun = viewTitle(view).toLowerCase();
+  return [
+    {
+      selector: tabButtonSelector(view, "missing"),
+      icon: "alert",
+      title: "Needs info",
+      text: `${viewTitle(view)} records with required details missing, usually from an imported file. Nothing is lost; they just need completing.`,
+    },
+    {
+      selector: `#${view}Table`,
+      icon: "info",
+      title: "Complete or continue",
+      text: `Use Fill in on a row to add what is missing. If you don't have the information, you can save and continue without it. When the list is empty, all ${noun} are complete.`,
+    },
+  ];
+}
+
+function tradeGuides(kind) {
+  const config = TRADE[kind];
+  const area = config.area;
+  const sale = kind === "sale";
+  return {
+    all: [
+      {
+        selector: tabButtonSelector(area, "all"),
+        icon: sale ? "income" : "expense",
+        title: sale ? "All sales" : "All purchases",
+        text: sale
+          ? "Every sale ever recorded, newest first: who bought, what they bought, the total, what was paid, and what is still owed."
+          : "Every purchase of stock, newest first: which supplier, what came in, what it cost, and what you still owe them.",
+      },
+      {
+        selector: `#${area}View [data-new-trade="${kind}"]`,
+        icon: "info",
+        title: sale ? "Record a sale" : "Record a purchase",
+        text: sale
+          ? "Use New sale every time you sell. Choose the items, quantity, and price, pick the customer or walk-in, and say how they paid. Stock, income, and dues update together."
+          : "Use New purchase whenever stock arrives. Choose the supplier and items (or + New item), enter quantity and cost, and say whether you paid. Stock, costs, and dues update together.",
+      },
+      {
+        selector: `#${area}PeriodFilter`,
+        icon: "clock",
+        title: "Choose a period",
+        text: "Show this month, last month, this year, or all time. The summary next to it totals only what is shown.",
+      },
+      {
+        selector: `#${area}Table`,
+        icon: "box",
+        title: "Open, invoice, or get paid",
+        text: sale
+          ? "Click a row to see the full sale. Invoice prints a professional invoice or shop receipt. Receive records a payment for anything unpaid."
+          : "Click a row to see the full purchase. Invoice prints the purchase record. Pay records a payment to the supplier.",
+      },
+    ],
+    unpaid: [
+      {
+        selector: tabButtonSelector(area, "unpaid"),
+        icon: "alert",
+        title: sale ? "Unpaid sales" : "Unpaid purchases",
+        text: sale
+          ? "Sales where the customer still owes money, including part-paid ones. Overdue ones are marked red."
+          : "Purchases you have not fully paid for yet. Overdue bills are marked red.",
+      },
+      {
+        selector: `#${area}Table`,
+        icon: "wallet",
+        title: sale ? "Receive a payment" : "Pay a supplier",
+        text: "Use the payment button on a row. Enter less than the balance for a part payment. A receipt is created and the balance drops right away.",
+      },
+    ],
+    payments: [
+      {
+        selector: tabButtonSelector(area, "payments"),
+        icon: "wallet",
+        title: sale ? "Payments received" : "Payments made",
+        text: sale
+          ? "Every payment customers made against sales, including money paid at the time of sale and later part payments."
+          : "Every payment you made to suppliers for purchases.",
+      },
+      {
+        selector: `#${area}Table`,
+        icon: "info",
+        title: "Receipts for every payment",
+        text: "Each payment has its own receipt number. Receipt prints it again; Open shows the sale or purchase it paid.",
+      },
+    ],
+    cancelled: [
+      {
+        selector: tabButtonSelector(area, "cancelled"),
+        icon: "alert",
+        title: sale ? "Cancelled sales" : "Cancelled purchases",
+        text: "Records are never deleted. A cancelled one stays here with who cancelled it and why, and its stock and money were reversed.",
+      },
+    ],
+  };
+}
+
+function guideDefinitions() {
+  const items = viewTitle("inventory");
+  const itemNoun = recordNoun("inventory").toLowerCase();
+  const sales = tradeGuides("sale");
+  const purchases = tradeGuides("purchase");
+  return {
+    "dashboard:": [
+      {
+        selector: "#dashboardView .page-head",
+        icon: "info",
+        title: "Dashboard",
+        text: "The overall picture of the business, built from your records. Nothing here is typed in; it updates as you work.",
+      },
+      {
+        selector: "#dashboardMetrics",
+        icon: "wallet",
+        title: "Key numbers",
+        text: "Income, expenses, profit, stock value, and what is owed. Amounts in different currencies are shown separately.",
+      },
+      { selector: "#duesPanel", icon: "clock", title: "Dues", text: "Who owes you and who you owe, most urgent first. All dues opens Finance → Dues to settle them." },
+      { selector: "#needsInputPanel", icon: "alert", title: "To do", text: "Overdue payments, low stock, unpaid salaries, and incomplete records that need you." },
+      { selector: "#activityPanel", icon: "users", title: "Recent activity", text: "The latest sales, purchases, payments, and changes, with who made them." },
+    ],
+    "finance:overview": [
+      {
+        selector: tabButtonSelector("finance", "overview"),
+        icon: "wallet",
+        title: "Finance overview",
+        text: "Income, expenses, and profit by month or by year, calculated from every transaction, sale, purchase, and salary.",
+      },
+      {
+        selector: "#financeView [data-panel-tabs='overview'] .control-bar",
+        icon: "clock",
+        title: "Monthly or annual",
+        text: "Switch between months and years, pick the year, and choose the currency when you record in more than one.",
+      },
+      { selector: "#financeKpis", icon: "income", title: "Totals for the period", text: "Income, expenses, profit, and profit margin for the chosen period." },
+      { selector: "#financePeriodTable", icon: "info", title: "Month by month", text: "Click any row to open the transactions behind those numbers." },
+      { selector: "#financeIncomeCategories", icon: "box", title: "By category", text: "Where money comes from and where it goes, grouped by category." },
+    ],
+    "finance:income": [
+      {
+        selector: tabButtonSelector("finance", "income"),
+        icon: "income",
+        title: "Income",
+        text: "All money coming in: sales, customer payments, and any other income such as services or rent received.",
+      },
+      {
+        selector: "#financeView [data-add='finance']",
+        icon: "info",
+        title: "Add other income",
+        text: "Use Add transaction for income that is not a sale. Sales should be recorded in Sales so stock updates too.",
+      },
+      {
+        selector: "#financeView [data-panel-tabs='income expenses all'] .table-toolbar",
+        icon: "clock",
+        title: "Filter the list",
+        text: "Filter by category, paid or unpaid, and month. The summary totals what is shown.",
+      },
+      {
+        selector: "#financeTable",
+        icon: "box",
+        title: "Receipts and payments",
+        text: "Receipt prints a voucher. Receive payment settles unpaid income. Entries from a sale open that sale.",
+      },
+    ],
+    "finance:expenses": [
+      {
+        selector: tabButtonSelector("finance", "expenses"),
+        icon: "expense",
+        title: "Expenses",
+        text: "All money going out: stock purchases, salaries, rent, bills, and anything else you pay for.",
+      },
+      {
+        selector: "#financeView [data-add='finance']",
+        icon: "info",
+        title: "Add an expense",
+        text: "Use Add transaction for bills, rent, utilities, and other costs. Stock purchases belong in Purchases; salaries in Employees → Payroll.",
+      },
+      {
+        selector: "#financeTable",
+        icon: "box",
+        title: "Vouchers and payments",
+        text: "Voucher prints a payment voucher. Pay settles an unpaid bill. Salary rows open Payroll and their salary slip.",
+      },
+    ],
+    "finance:dues": [
+      {
+        selector: tabButtonSelector("finance", "dues"),
+        icon: "clock",
+        title: "Dues",
+        text: "Everyone who owes the business, and everyone the business owes, in one place.",
+      },
+      { selector: "#duesTotals", icon: "alert", title: "What is owed", text: "Totals owed to you and by you, with how much of each is overdue." },
+      {
+        selector: "#receivablesList",
+        icon: "income",
+        title: "Owed to you",
+        text: "Grouped by customer. Receive payment settles their oldest items first and creates a receipt. Statement prints everything they owe.",
+      },
+      {
+        selector: "#payablesList",
+        icon: "expense",
+        title: "You owe",
+        text: "Grouped by supplier. Pay settles their bills oldest first. Unpaid salaries are listed here too and paid from Employees → Payroll.",
+      },
+    ],
+    "finance:payments": [
+      {
+        selector: tabButtonSelector("finance", "payments"),
+        icon: "wallet",
+        title: "Payments",
+        text: "Every payment received and paid, newest first: sales, purchases, dues, opening balances, and salaries.",
+      },
+      {
+        selector: "#paymentsDirectionFilter",
+        icon: "clock",
+        title: "Money in or out",
+        text: "Show only money received, only money paid out, or both, for any month.",
+      },
+      {
+        selector: "#paymentsLedger",
+        icon: "info",
+        title: "Receipts",
+        text: "Each payment has a receipt number. Receipt prints it again; Open jumps to what it paid for.",
+      },
+    ],
+    "finance:all": [
+      {
+        selector: tabButtonSelector("finance", "all"),
+        icon: "box",
+        title: "All transactions",
+        text: "The complete finance record: income and expenses, paid and unpaid, including cancelled entries kept for history.",
+      },
+      {
+        selector: "#financeView [data-panel-tabs='income expenses all'] .table-toolbar",
+        icon: "clock",
+        title: "Find anything",
+        text: "Combine category, payment status, and month filters with the search box at the top.",
+      },
+    ],
+    "inventory:all": [
+      {
+        selector: tabButtonSelector("inventory", "all"),
+        icon: "box",
+        title: `All ${items.toLowerCase()}`,
+        text: `Every ${itemNoun} with its stock on hand, cost, price, and stock value.`,
+      },
+      {
+        selector: "#inventoryView [data-add='inventory']",
+        icon: "info",
+        title: `Add a ${itemNoun}`,
+        text: "Enter its name, category, prices, and the stock you have now. The code is filled in automatically if you leave it blank.",
+      },
+      { selector: "#inventoryCategoryFilter", icon: "clock", title: "Filter by category", text: "Show one category at a time." },
+      {
+        selector: "#inventoryTable",
+        icon: "wallet",
+        title: "Sell, adjust, and trace",
+        text: "Sell starts a sale with this item. Adjust stock records damage, loss, or count corrections with a reason. History shows every stock change.",
+      },
+    ],
+    "inventory:low": [
+      {
+        selector: tabButtonSelector("inventory", "low"),
+        icon: "alert",
+        title: "Low stock",
+        text: `${items} at or below their reorder level. Record a purchase when new stock arrives and they leave this list.`,
+      },
+    ],
+    "inventory:history": [
+      {
+        selector: tabButtonSelector("inventory", "history"),
+        icon: "clock",
+        title: "Stock history",
+        text: "Every change to stock: opening stock, sales, purchases, cancellations, and adjustments, with who made it and the stock left after.",
+      },
+      { selector: "#stockTypeFilter", icon: "box", title: "Show one kind of change", text: "Filter to only sales, purchases, adjustments, or opening stock." },
+      { selector: "#stockHistoryWrap", icon: "info", title: "Trace any number", text: "Click a sale or purchase number to open it. Adjustment notes can be printed." },
+    ],
+    "inventory:missing": missingInfoGuide("inventory"),
+    "sales:all": sales.all,
+    "sales:unpaid": sales.unpaid,
+    "sales:payments": sales.payments,
+    "sales:cancelled": sales.cancelled,
+    "purchases:all": purchases.all,
+    "purchases:unpaid": purchases.unpaid,
+    "purchases:payments": purchases.payments,
+    "purchases:cancelled": purchases.cancelled,
+    "contacts:customers": [
+      {
+        selector: tabButtonSelector("contacts", "customers"),
+        icon: "users",
+        title: "Customers",
+        text: "People and companies who buy from you, with what they currently owe.",
+      },
+      {
+        selector: "#contactsView [data-add='contacts']",
+        icon: "info",
+        title: "Add a contact",
+        text: "Add a name, type, and phone. Customers are also saved automatically when you add a new customer during a sale.",
+      },
+      {
+        selector: "#contactsTable",
+        icon: "wallet",
+        title: "History and payments",
+        text: "History shows everything bought, sold, and paid with this contact. Record payment settles what they owe.",
+      },
+    ],
+    "contacts:suppliers": [
+      {
+        selector: tabButtonSelector("contacts", "suppliers"),
+        icon: "users",
+        title: "Suppliers",
+        text: "Suppliers and dealers you buy stock from, with what you owe each of them.",
+      },
+      { selector: "#contactsTable", icon: "wallet", title: "What you owe them", text: "History shows every purchase and payment. Record payment pays what you owe." },
+    ],
+    "contacts:all": [
+      { selector: tabButtonSelector("contacts", "all"), icon: "users", title: "All contacts", text: "Customers and suppliers together." },
+    ],
+    "contacts:missing": missingInfoGuide("contacts"),
+    "employees:directory": [
+      {
+        selector: tabButtonSelector("employees", "directory"),
+        icon: "users",
+        title: "Employee directory",
+        text: "Everyone who works for the business: job, department, contact details, and salary.",
+      },
+      {
+        selector: "#employeesView [data-add='employees']",
+        icon: "info",
+        title: "Add an employee",
+        text: "Add their details and salary. To let them sign in, give them a login email, password, and access role. An employee ID is created automatically.",
+      },
+      { selector: "#employeeDepartmentFilter", icon: "clock", title: "Filter by department", text: "Show one team at a time." },
+      { selector: "#employeesTable", icon: "wallet", title: "Pay history", text: "Pay history lists every salary paid to that employee, with slips." },
+    ],
+    "employees:payroll": [
+      {
+        selector: tabButtonSelector("employees", "payroll"),
+        icon: "wallet",
+        title: "Payroll",
+        text: "Who has been paid and who is still unpaid for each month.",
+      },
+      { selector: "#payrollMonthSelect", icon: "clock", title: "Pick a month", text: "Earlier months stay here, so unpaid salaries from past months are never forgotten." },
+      {
+        selector: "#payrollTable",
+        icon: "income",
+        title: "Pay salaries",
+        text: "Pay salary lets you add a bonus or deduction and creates a salary slip. The payment is also recorded as a Salaries expense in Finance.",
+      },
+      { selector: "#payAllSalariesBtn", icon: "users", title: "Pay everyone at once", text: "Pays all unpaid salaries for the month, each with its own slip." },
+    ],
+    "employees:history": [
+      {
+        selector: tabButtonSelector("employees", "history"),
+        icon: "clock",
+        title: "Pay history",
+        text: "Every salary payment, newest first, with the slip number, method, and any bonus or deduction.",
+      },
+      { selector: "#payHistoryEmployeeFilter", icon: "users", title: "One employee", text: "Choose an employee to see only their payments." },
+      {
+        selector: "#payHistoryTable",
+        icon: "info",
+        title: "Slips and corrections",
+        text: "Salary slip prints the slip again. Undo reverses a mistaken payment with a reason; the record stays marked Reversed.",
+      },
+    ],
+    "employees:access": [
+      {
+        selector: tabButtonSelector("employees", "access"),
+        icon: "tool",
+        title: "Logins & access",
+        text: "Which employees can sign in, the email they use, and the role that decides what they see.",
+      },
+      {
+        selector: "#accessTable",
+        icon: "users",
+        title: "Set up a login",
+        text: "Set up login adds an email, password, and role. Give the email and password to the employee.",
+      },
+    ],
+    "employees:missing": missingInfoGuide("employees"),
+    "assets:all": [
+      {
+        selector: tabButtonSelector("assets", "all"),
+        icon: "box",
+        title: `All ${viewTitle("assets").toLowerCase()}`,
+        text: "Equipment, vehicles, furniture, and anything else the business owns and uses, with who has it and its value.",
+      },
+      {
+        selector: "#assetsView [data-add='assets']",
+        icon: "info",
+        title: "Add an asset",
+        text: "Record what it is, who it is assigned to, where it is, and its value. The asset code is filled in automatically if blank.",
+      },
+    ],
+    "assets:maintenance": [
+      {
+        selector: tabButtonSelector("assets", "maintenance"),
+        icon: "alert",
+        title: "Needs maintenance",
+        text: "Assets marked Maintenance or Damaged. Edit an asset and set it back to Active when it is repaired.",
+      },
+    ],
+    "assets:missing": missingInfoGuide("assets"),
+    "setup:business": [
+      {
+        selector: tabButtonSelector("setup", "business"),
+        icon: "tool",
+        title: "Business",
+        text: "Edit your business information. It appears at the top of every invoice, receipt, and report.",
+      },
+      {
+        selector: "#businessNameInput",
+        icon: "info",
+        title: "Name, type, and currency",
+        text: "The business type arranges section names and fields to suit you. The default currency is used for new records only.",
+      },
+      {
+        selector: "#businessPhoneInput",
+        icon: "info",
+        title: "Details for documents",
+        text: "Phone, email, tax number, and address are printed on invoices and receipts, so keep them accurate.",
+      },
+      {
+        selector: "#setupModuleChoices",
+        icon: "box",
+        title: "Work areas",
+        text: "Switch sections on or off. Turning one off hides it from everyone without deleting its records.",
+      },
+      { selector: "#setupChecklist", icon: "alert", title: "Launch checklist", text: "What is left to set up before your team starts using LedgerFlow." },
+    ],
+    "setup:roles": [
+      {
+        selector: tabButtonSelector("setup", "roles"),
+        icon: "users",
+        title: "Roles & access",
+        text: "Create roles for managers, cashiers, accountants, or any job, and choose exactly which data each role can see and change.",
+      },
+      {
+        selector: "#setupView .role-builder",
+        icon: "info",
+        title: "Create a role",
+        text: "Name the role and start from an existing one to copy its permissions, then adjust.",
+      },
+      {
+        selector: "#roleCards",
+        icon: "tool",
+        title: "Choose permissions",
+        text: "For each section, tick View, Add, Edit, or Delete. Anything a role can't view is hidden completely from people with that role.",
+      },
+      {
+        selector: '#employeesTabs, .nav-item[data-view="employees"]',
+        icon: "users",
+        title: "Give roles to people",
+        text: "Assign a role to each employee in Employees → Logins & access, along with their login email and password.",
+      },
+    ],
+    "setup:fields": [
+      {
+        selector: tabButtonSelector("setup", "fields"),
+        icon: "box",
+        title: "Fields",
+        text: "Shape the forms around your business: rename base fields, hide ones you don't use, or add your own.",
+      },
+      { selector: "#fieldModuleSelect", icon: "info", title: "Pick a section", text: "Choose which section's fields you want to change." },
+      { selector: "#fieldList", icon: "tool", title: "Existing fields", text: "Rename or hide base fields. Fields with a lock are needed for LedgerFlow to work and can only be renamed." },
+      {
+        selector: "#fieldEditor",
+        icon: "income",
+        title: "Add your own field",
+        text: "For example Batch Number, Expiry Date, or Project Site. Choose text, number, date, or a list of choices, and whether it is required.",
+      },
+    ],
+    "setup:templates": [
+      {
+        selector: tabButtonSelector("setup", "templates"),
+        icon: "box",
+        title: "Templates & samples",
+        text: "Try LedgerFlow with realistic sample data, or apply a business template.",
+      },
+      {
+        selector: "#dataToolsPanel",
+        icon: "alert",
+        title: "Sample data",
+        text: "Loading a sample replaces current records, so use it to explore before entering real data.",
+      },
+    ],
+    "dataSources:": [
+      {
+        selector: "#dataSourcesView .page-head",
+        icon: "inbox",
+        title: "Import data",
+        text: "Bring in records you already keep in spreadsheets, instead of typing them again.",
+      },
+      {
+        selector: "#dataSourcesView .import-box",
+        icon: "info",
+        title: "Choose where and what",
+        text: "Pick the section to import into, then choose a CSV, Excel, JSON, or tab-separated file.",
+      },
+      {
+        selector: "#canonicalModelMap",
+        icon: "box",
+        title: "How columns are matched",
+        text: "Your columns are matched to these fields. You can change the matching, and LedgerFlow asks for anything required that is missing.",
+      },
+      { selector: "#sampleCsvBtn", icon: "inbox", title: "Not sure of the format?", text: "Download a sample CSV to see which columns work best." },
+    ],
+    "reports:": [
+      { selector: "#reportCards", icon: "wallet", title: "Reports", text: "A snapshot of the business: money, stock, dues, and team." },
+      {
+        selector: "#tradeReportPanel",
+        icon: "income",
+        title: "Sales, purchases & stock",
+        text: "Best-selling items, top customers, spending by supplier, gross profit, and stock movement for the chosen period.",
+      },
+      { selector: "#reportPeriodSelect", icon: "clock", title: "Choose the period", text: "This month, last month, this year, or all time." },
+      { selector: "#printReportBtn", icon: "info", title: "Print or save as PDF", text: "Print the report for meetings, or save it as a PDF from the print window." },
+    ],
+  };
+}
+
+function currentGuideKey(view = currentView) {
+  return `${view}:${activeTab(view) || ""}`;
+}
+
+function guideStepsFor(key) {
+  return (guideDefinitions()[key] || []).filter((step) => {
+    const target = document.querySelector(step.selector);
+    return target && target.getClientRects().length;
+  });
+}
+
+function guideSeen(key) {
+  const user = currentUser();
+  return Boolean(user && state.onboarding?.tabGuides?.[user.id]?.[key]);
+}
+
+function markGuideSeen(key, status) {
+  const user = currentUser();
+  if (!user) return;
+  state.onboarding.tabGuides ||= {};
+  state.onboarding.tabGuides[user.id] ||= {};
+  state.onboarding.tabGuides[user.id][key] = status;
+  saveState();
+}
+
+function autoGuidesOff() {
+  const user = currentUser();
+  return Boolean(user && state.onboarding?.autoGuidesOff?.[user.id]);
+}
+
+function startPageGuide({ automatic = false } = {}) {
+  if (!currentUser() || !els.setupWizardBackdrop.hidden || !els.tourLayer.hidden) return false;
+  const key = currentGuideKey();
+  const steps = guideStepsFor(key);
+  if (!steps.length) {
+    if (!automatic) showToast("There is no guide for this view yet");
+    return false;
+  }
+  tutorialSteps = steps;
+  tutorialStep = 0;
+  tutorialOriginView = currentView;
+  tutorialFollowUp = false;
+  tutorialMode = { type: "guide", key };
+  els.tourLayer.hidden = false;
+  renderTutorialStep();
+  return true;
+}
+
+let guideTimer = null;
+
+function scheduleAutoGuide() {
+  window.clearTimeout(guideTimer);
+  guideTimer = window.setTimeout(() => {
+    const user = currentUser();
+    if (!user || previewRoleId || autoGuidesOff()) return;
+    if (!state.onboarding?.tutorials?.[user.id]) return;
+    if (!els.modalBackdrop.hidden || !els.tourLayer.hidden || !els.setupWizardBackdrop.hidden) return;
+    const key = currentGuideKey();
+    if (guideSeen(key) || !guideDefinitions()[key]) return;
+    startPageGuide({ automatic: true });
+  }, 450);
+}
+
+function addGuideButtons() {
+  document.querySelectorAll(".view > .page-head").forEach((head) => {
+    if (head.querySelector("[data-page-guide]")) return;
+    let actions = head.querySelector(".page-actions");
+    if (!actions) {
+      actions = document.createElement("div");
+      actions.className = "page-actions";
+      head.appendChild(actions);
+    }
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "button ghost guide-button";
+    button.dataset.pageGuide = "";
+    button.title = "Explain this page and tab";
+    button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17h.01" /></svg><span>Guide</span>`;
+    actions.prepend(button);
+  });
+}
+
 function beginNewUserFlow() {
   const user = currentUser();
   if (!user || !els.modalBackdrop.hidden || !els.tourLayer.hidden || !els.setupWizardBackdrop.hidden) return;
@@ -2046,6 +2928,7 @@ function startTutorial({ automatic = false, followUp = false } = {}) {
   tutorialStep = 0;
   tutorialOriginView = currentView;
   tutorialFollowUp = Boolean(automatic && followUp);
+  tutorialMode = { type: "main" };
   els.tourLayer.hidden = false;
   renderTutorialStep();
 }
@@ -2055,7 +2938,10 @@ function renderTutorialStep() {
   if (!step) return finishTutorial("completed");
   if (step.view && currentView !== step.view) setView(step.view);
 
-  els.tourStepCount.textContent = `${tutorialStep + 1} of ${tutorialSteps.length}`;
+  const guide = tutorialMode.type === "guide";
+  els.tourStepCount.textContent = `${guide ? "Guide · " : ""}${tutorialStep + 1} of ${tutorialSteps.length}`;
+  byId("skipTutorialBtn").textContent = guide ? "Skip guide" : "Skip tutorial";
+  byId("muteGuidesBtn").hidden = !guide;
   els.tourIcon.innerHTML = ICONS[step.icon] || ICONS.info;
   els.tourTitle.textContent = step.title;
   els.tourText.textContent = step.text;
@@ -2125,7 +3011,17 @@ function moveTutorial(direction) {
 
 function finishTutorial(status) {
   const user = currentUser();
+  if (tutorialMode.type === "guide") {
+    markGuideSeen(tutorialMode.key, status);
+    tutorialMode = { type: "main" };
+    els.tourLayer.hidden = true;
+    document.body.classList.remove("menu-open");
+    window.clearTimeout(tutorialPositionTimer);
+    return;
+  }
   if (user) {
+    // The main tutorial already explains the dashboard.
+    markGuideSeen("dashboard:", status);
     state.onboarding.tutorials[user.id] = { status, completedAt: new Date().toISOString() };
     saveState();
   }
@@ -2238,6 +3134,7 @@ function render() {
     renderReports();
     renderTradeReports();
   }
+  scheduleAutoGuide();
 }
 
 function renderChrome() {
@@ -3104,7 +4001,7 @@ function needsMaintenance(asset) {
 /* Dues: money waiting to come in (receivables) or go out (payables). */
 
 function salaryPayment(employee, month) {
-  return state.finance.find((entry) => entry.employeeId === employee.id && entry.payrollMonth === month);
+  return state.finance.find((entry) => entry.employeeId === employee.id && entry.payrollMonth === month && !entry.cancelled);
 }
 
 function payrollStartMonth(employee) {
@@ -3223,8 +4120,8 @@ function dueItemHtml(item, direction) {
     action = `<button type="button" class="accent" data-mark-paid="${escapeHtml(item.id)}">${direction === "in" ? "Receive payment" : "Pay"}</button>`;
   } else if (item.kind === "balance" && can("finance", "add")) {
     action = `<button type="button" class="accent" data-record-payment="${escapeHtml(item.id)}">Record payment</button>`;
-  } else if (item.kind === "salary" && can("finance", "add")) {
-    action = `<button type="button" class="accent" data-pay-salary="${escapeHtml(item.id)}:${item.month}">Pay salary</button>`;
+  } else if (item.kind === "salary" && canOpenView("employees")) {
+    action = `<button type="button" class="accent" data-open-payroll="${item.month}">Payroll</button>`;
   }
   const subtitle = [item.party ? item.title : "", item.detail].filter(Boolean).join(" · ");
   return `
@@ -3963,6 +4860,7 @@ function tabDefinitions(view) {
       { key: "income", label: "Income", count: liveFinance().filter((entry) => entry.type === "Income").length },
       { key: "expenses", label: "Expenses", count: liveFinance().filter((entry) => entry.type === "Expense").length },
       { key: "dues", label: "Dues", count: overdue, alert: true, hideZero: true },
+      { key: "payments", label: "Payments", count: allPayments().length },
       { key: "all", label: "All transactions", count: state.finance.length },
     ];
   }
@@ -3982,6 +4880,11 @@ function tabDefinitions(view) {
     return [
       { key: "all", label: view === "sales" ? "All sales" : "All purchases", count: live.length },
       { key: "unpaid", label: "Unpaid", count: live.filter((trade) => tradeBalance(trade) > 0).length, alert: true, hideZero: true },
+      {
+        key: "payments",
+        label: view === "sales" ? "Payments received" : "Payments made",
+        count: allPayments({ filter: (entry) => entry.sourceType === (view === "sales" ? "sale" : "purchase") }).length,
+      },
       { key: "cancelled", label: "Cancelled", show: cancelled > 0, count: cancelled },
     ];
   }
@@ -3998,6 +4901,12 @@ function tabDefinitions(view) {
     return [
       { key: "directory", label: "Directory", count: state.employees.length },
       { key: "payroll", label: "Payroll", show: canAccess("sensitiveNumbers"), count: unpaid, alert: true, hideZero: true },
+      {
+        key: "history",
+        label: "Pay history",
+        show: canAccess("sensitiveNumbers"),
+        count: state.finance.filter((entry) => isSalaryEntry(entry) && !entry.cancelled).length,
+      },
       { key: "access", label: "Logins & access", show: canAccess("settings") },
       { key: "missing", label: "Needs info", show: missingCount("employees") > 0, count: missingCount("employees"), alert: true },
     ];
@@ -4079,6 +4988,7 @@ function renderFinance() {
   const tab = activeTab("finance");
   if (tab === "overview") renderFinanceOverview();
   else if (tab === "dues") renderDuesTab();
+  else if (tab === "payments") renderPaymentsTab();
   else renderModule("finance");
 }
 
@@ -4256,20 +5166,6 @@ function renderCategoryBars(targetId, type, currency, inScope) {
     : `<div class="empty-state">No ${type.toLowerCase()} recorded for this period.</div>`;
 }
 
-function dueGroupsHtml(items, direction) {
-  if (!items.length) {
-    return `<div class="empty-state">${direction === "in" ? "Nobody owes the business anything right now." : "Nothing to pay right now."}</div>`;
-  }
-  const overdue = items.filter((item) => item.overdue);
-  const open = items.filter((item) => !item.overdue);
-  return [
-    overdue.length ? `<p class="due-group-title">Overdue</p>${overdue.map((item) => dueItemHtml(item, direction)).join("")}` : "",
-    open.length
-      ? `<p class="due-group-title">${overdue.length ? "Upcoming and open" : "Open"}</p>${open.map((item) => dueItemHtml(item, direction)).join("")}`
-      : "",
-  ].join("");
-}
-
 function renderDuesTab() {
   const dues = buildDues();
   const owedIn = moneyHeadline(duesTotals(dues.receivables));
@@ -4308,8 +5204,8 @@ function renderDuesTab() {
       note: [owedOutLate.others, `${lateOut} overdue`].filter(Boolean).join(" · "),
     }),
   ].join("");
-  byId("receivablesList").innerHTML = dueGroupsHtml(dues.receivables, "in");
-  byId("payablesList").innerHTML = dueGroupsHtml(dues.payables, "out");
+  byId("receivablesList").innerHTML = duePartyListHtml(dues.receivables, "in");
+  byId("payablesList").innerHTML = duePartyListHtml(dues.payables, "out");
 }
 
 function markPaid(id) {
@@ -4324,20 +5220,8 @@ function recordPayment(contactId) {
     showToast("No opening balance to settle. Mark unpaid transactions as paid in Finance → Dues.");
     return;
   }
-  const incoming = balance > 0;
-  openModal("finance", null, {
-    prefill: {
-      date: todayIso(),
-      type: incoming ? "Income" : "Expense",
-      category: incoming ? "Customer payment" : "Supplier payment",
-      description: `Payment ${incoming ? "from" : "to"} ${contact.name}`,
-      amount: Math.abs(balance),
-      currency: recordCurrency(contact),
-      status: "Paid",
-      party: contact.name,
-    },
-    context: { settleContactId: contact.id },
-  });
+  // Settle through the person's dues so opening balances and unpaid invoices are paid oldest first.
+  openPartyPayment(balance > 0 ? "in" : "out", `${String(contact.name || "").trim().toLowerCase()}|${recordCurrency(contact)}`);
 }
 
 /* ---------- Employees: payroll and access ---------- */
@@ -4347,6 +5231,7 @@ let payrollMonth = null;
 function renderEmployeesView() {
   const tab = activeTab("employees");
   if (tab === "payroll") renderPayroll();
+  else if (tab === "history") renderPayHistory();
   else if (tab === "access") renderAccess();
   else renderModule("employees");
 }
@@ -4423,6 +5308,12 @@ function renderPayroll() {
                 if (isUnpaidRow && canPay) {
                   actions.push(`<button type="button" class="accent" data-pay-salary="${escapeHtml(employee.id)}:${payrollMonth}">Pay salary</button>`);
                 }
+                if (payment) {
+                  actions.push(`<button type="button" data-document="salary:${escapeHtml(payment.id)}">Salary slip</button>`);
+                  if (can("finance", "edit")) {
+                    actions.push(`<button type="button" class="warn" data-reverse-salary="${escapeHtml(payment.id)}">Undo</button>`);
+                  }
+                }
                 if (!payable && employee.status !== "Inactive" && can("employees", "edit")) {
                   actions.push(`<button type="button" data-edit="employees:${escapeHtml(employee.id)}">Set salary</button>`);
                 }
@@ -4441,69 +5332,6 @@ function renderPayroll() {
       }
     </tbody>
   `;
-}
-
-function paySalary(employeeId, month, { batch = false } = {}) {
-  const employee = state.employees.find((record) => record.id === employeeId);
-  if (!employee || !can("finance", "add") || !canAccess("sensitiveNumbers")) return false;
-  if (salaryPayment(employee, month)) {
-    if (!batch) showToast(`${employee.name} is already paid for ${monthName(month, "long")}`);
-    return false;
-  }
-  const amount = parseMoney(employee.salary);
-  if (!amount) {
-    if (!batch) showToast("Set this employee's salary first");
-    return false;
-  }
-  const currency = recordCurrency(employee);
-  if (
-    !batch &&
-    !window.confirm(
-      `Pay ${employee.name} ${formatCurrency(amount, currency)} for ${monthName(month, "long")}? It will be recorded as a paid expense.`,
-    )
-  ) {
-    return false;
-  }
-  state.finance.unshift({
-    id: makeId("finance"),
-    date: month === todayIso().slice(0, 7) ? todayIso() : lastDayOfMonth(month),
-    type: "Expense",
-    category: "Salaries",
-    description: `Salary - ${employee.name} - ${monthName(month, "long")}`,
-    amount,
-    currency,
-    status: "Paid",
-    party: employee.name,
-    employeeId: employee.id,
-    payrollMonth: month,
-    paidOn: todayIso(),
-    sourceName: "Payroll",
-    createdAt: new Date().toISOString(),
-    infoDismissed: true,
-  });
-  if (!batch) {
-    addActivity(`Salary paid: ${employee.name} (${formatCurrency(amount, currency)}, ${monthName(month, "long")})`, "finance");
-    saveState();
-    render();
-    showToast(`${employee.name}'s salary recorded as paid`);
-  }
-  return true;
-}
-
-function payAllSalaries(month) {
-  const unpaid = payrollRows(month)
-    .filter((row) => row.unpaid)
-    .map((row) => row.employee);
-  if (!unpaid.length) return;
-  const total = formatMoneyTotals(sumByCurrency(unpaid, (employee) => parseMoney(employee.salary)));
-  if (!window.confirm(`Pay ${unpaid.length} salar${unpaid.length === 1 ? "y" : "ies"} for ${monthName(month, "long")} (${total})?`)) {
-    return;
-  }
-  const paid = unpaid.filter((employee) => paySalary(employee.id, month, { batch: true })).length;
-  addActivity(`Paid ${paid} salaries for ${monthName(month, "long")} (${total})`, "finance");
-  saveState();
-  render();
-  showToast(`${paid} salar${paid === 1 ? "y" : "ies"} recorded as paid`);
 }
 
 function renderAccess() {
@@ -4598,7 +5426,10 @@ const tableColumns = {
     { field: "value", className: "num", render: (asset) => escapeHtml(formatRecordMoney(asset, asset.value)) },
   ],
   employees: [
-    { field: "name", render: (employee) => titleCell(employee.name, employee.email || employee.phone) },
+    {
+      field: "name",
+      render: (employee) => titleCell(employee.name, [employee.employeeId, employee.email || employee.phone].filter((part) => !isBlank(part)).join(" · ")),
+    },
     { field: "role" },
     { field: "department" },
     { field: "phone" },
@@ -4611,7 +5442,7 @@ const tableColumns = {
       render: (entry) =>
         titleCell(
           entry.description,
-          [entry.category, entry.party, entry.sourceType ? `From ${entry.sourceType} ${entry.reference || ""}`.trim() : ""]
+          [entry.sourceType ? "" : entry.reference, entry.category, entry.party, entry.sourceType ? `From ${entry.sourceType} ${entry.reference || ""}`.trim() : ""]
             .filter((part) => !isBlank(part))
             .join(" · "),
         ),
@@ -4630,7 +5461,7 @@ const tableColumns = {
     },
   ],
   contacts: [
-    { field: "name", render: (contact) => titleCell(contact.name, [contact.phone, contact.email].filter(Boolean).join(" · ")) },
+    { field: "name", render: (contact) => titleCell(contact.name, [contact.code, contact.phone, contact.email].filter(Boolean).join(" · ")) },
     {
       field: "type",
       render: (contact) => (isBlank(contact.type) ? "—" : badge(contact.type, contact.type === "Customer" ? "green" : "blue")),
@@ -4820,6 +5651,20 @@ function rowActions(module, record) {
       `<button type="button" class="accent" data-mark-paid="${escapeHtml(record.id)}">${record.type === "Income" ? "Receive payment" : "Pay"}</button>`,
     );
   }
+  if (module === "finance" && isSalaryEntry(record)) {
+    // Salary payments are managed from Employees → Payroll.
+    if (canOpenView("employees")) actions.push(`<button type="button" data-open-payroll="${escapeHtml(record.payrollMonth)}">Payroll</button>`);
+    actions.push(`<button type="button" data-document="salary:${escapeHtml(record.id)}">Salary slip</button>`);
+    return `<div class="row-actions">${actions.join("")}</div>`;
+  }
+  if (module === "finance" && record.settlesContactId) {
+    // A payment against an opening balance; its receipt is the record of it.
+    actions.push(`<button type="button" data-document="finance:${escapeHtml(record.id)}">Receipt</button>`);
+    return `<div class="row-actions">${actions.join("")}</div>`;
+  }
+  if (module === "employees" && canAccess("sensitiveNumbers")) {
+    actions.push(`<button type="button" data-pay-history="${escapeHtml(record.id)}">Pay history</button>`);
+  }
   if (module === "finance" && record.sourceType) {
     // Entries created by a sale or purchase are changed only through that sale or purchase.
     const area = record.sourceType === "sale" ? "sales" : "purchases";
@@ -4939,11 +5784,17 @@ function openModal(module, id = null, { prefill = null, context = null } = {}) {
           </div>`
         : ""
     }
+    ${formHelpBarHtml(
+      id
+        ? "Each field explains what it is for. Fields marked * are required."
+        : `Fill in what you know. Fields marked * are required; ID fields left blank are numbered automatically.`,
+    )}
     ${formSections(module)
       .map(
         ([name, fields]) => `
         <fieldset class="form-section">
           <legend>${escapeHtml(name)}</legend>
+          ${sectionHelpHtml(SECTION_HELP[name] || (name === customSectionName() ? "Extra details your business added for this kind of record." : ""))}
           <div class="form-grid">
             ${fields.map((field) => fieldTemplate(field, source, !record, missingNames.has(field.name))).join("")}
           </div>
@@ -4959,6 +5810,7 @@ function openModal(module, id = null, { prefill = null, context = null } = {}) {
       }</button>
     </div>
   `;
+  applyFieldHelpVisibility();
   els.modalBackdrop.hidden = false;
   const focusTarget =
     els.recordForm.querySelector(".is-missing input, .is-missing select") ||
@@ -4997,13 +5849,22 @@ function fieldTemplate(field, record, isNew, isMissing) {
   ]
     .filter(Boolean)
     .join(" ");
-  const common = `id="${id}" name="${escapeHtml(field.name)}" ${attrs}`;
-  const hint = field.hint ? `<small>${escapeHtml(field.hint)}</small>` : "";
+  const module = editing?.module || "";
+  const autoId = field.autoId && AUTO_ID_FIELDS[module] === field.name;
+  const common = `id="${id}" name="${escapeHtml(field.name)}" ${attrs}${
+    autoId && isBlank(value) ? ` placeholder="Automatic: ${escapeHtml(previewAutoId(module, { ...record, id: record.id || "" }))}"` : ""
+  }`;
+  const helpText = fieldHelpText(module, field);
+  const hint = field.hint && !helpText ? `<small>${escapeHtml(field.hint)}</small>` : "";
   const wrap = (control) => `
     <div class="field ${field.full ? "full" : ""} ${isMissing ? "is-missing" : ""}">
-      <label for="${id}">${escapeHtml(field.label)}${field.required ? " *" : ""}</label>
+      <div class="field-label-row">
+        <label for="${id}">${escapeHtml(field.label)}${field.required ? " *" : ""}</label>
+        ${helpText ? `<button type="button" class="field-help-toggle" data-field-help aria-label="What is ${escapeHtml(field.label)}?" title="What is this?">?</button>` : ""}
+      </div>
       ${control}
       ${hint}
+      ${helpText ? `<small class="field-help">${escapeHtml(helpText)}</small>` : ""}
     </div>
   `;
 
@@ -5116,6 +5977,18 @@ async function handleSubmit(event) {
     return;
   }
 
+  const clash = findIdClash(module, record);
+  if (clash) {
+    showFormError(
+      `${fieldLabel(module, AUTO_ID_FIELDS[module])} "${record[AUTO_ID_FIELDS[module]]}" is already used by ${recordLabel(module, clash)}. Use another one, or leave it blank to get one automatically.`,
+    );
+    return;
+  }
+  if (AUTO_ID_FIELDS[module] && record[AUTO_ID_FIELDS[module]] !== undefined) {
+    record[AUTO_ID_FIELDS[module]] = String(record[AUTO_ID_FIELDS[module]]).trim();
+  }
+  assignAutoId(module, record);
+
   if (module === "employees") {
     const error = await applyEmployeeLogin(record, formData);
     if (error) {
@@ -5176,7 +6049,8 @@ async function handleSubmit(event) {
     if (module === "inventory") logOpeningStock(record, "Opening stock");
     touchManualSource();
     addActivity(`${recordNoun(module)} added: ${recordLabel(module, record)}`, module);
-    showToast(`${recordNoun(module)} added`);
+    const idField = AUTO_ID_FIELDS[module];
+    showToast(`${recordNoun(module)} added${idField && record[idField] ? ` · ${record[idField]}` : ""}`);
   }
   saveState();
   closeModal();
@@ -5208,6 +6082,10 @@ function deleteRecord(module, id) {
   }
   if (module === "finance" && record.sourceType) {
     showToast(`This entry belongs to ${record.reference || `a ${record.sourceType}`}. Cancel the ${record.sourceType} instead.`);
+    return;
+  }
+  if (module === "finance" && isSalaryEntry(record)) {
+    showToast("This is a salary payment. Undo it from Employees → Pay history instead.");
     return;
   }
   if (!window.confirm(`Delete "${recordLabel(module, record)}"? This cannot be undone.`)) return;
@@ -6206,6 +7084,10 @@ function tradeStatus(trade) {
   return { label: overdue ? "Unpaid · overdue" : "Unpaid", tone: overdue ? "red" : "amber" };
 }
 
+function nextItemCode() {
+  return generateAutoId("inventory", {}, autoIdContext("inventory"));
+}
+
 function nextTradeNumber(kind) {
   state.counters[kind] = (Number(state.counters[kind]) || 0) + 1;
   return `${kind === "sale" ? "S" : "P"}-${String(state.counters[kind]).padStart(4, "0")}`;
@@ -6281,7 +7163,20 @@ function tradeItemPrice(kind, item) {
 
 function newTradeLine(kind, itemId = "") {
   const item = itemId ? state.inventory.find((entry) => entry.id === itemId) : null;
-  return { key: makeId("line"), itemId, custom: false, description: "", quantity: 1, unitPrice: tradeItemPrice(kind, item), priceTouched: false };
+  return {
+    key: makeId("line"),
+    itemId,
+    custom: false,
+    isNew: false,
+    newName: "",
+    newSku: "",
+    newCategory: "",
+    newSellPrice: "",
+    description: "",
+    quantity: 1,
+    unitPrice: tradeItemPrice(kind, item),
+    priceTouched: false,
+  };
 }
 
 function openTradeForm(kind, { itemId = "" } = {}) {
@@ -6357,6 +7252,7 @@ function tradeContactOptions(kind, selected) {
 
 function tradeLineHint(kind, line) {
   if (line.custom) return kind === "sale" ? "Not taken from stock" : "Not added to stock";
+  if (line.isNew) return `Will be added to ${viewTitle("inventory")} with this quantity and cost`;
   const item = state.inventory.find((entry) => entry.id === line.itemId);
   if (!item) return "";
   const currency = recordCurrency(item);
@@ -6407,6 +7303,13 @@ function renderTradeForm() {
           <label class="sr-only" for="line-item-${line.key}">Item ${index + 1}</label>
           <select id="line-item-${line.key}" name="line-item-${line.key}" data-trade-refresh>
             <option value="">Choose ${escapeHtml(recordNoun("inventory").toLowerCase())}…</option>
+            ${
+              kind === "purchase" && can("inventory", "add")
+                ? `<option value="__new__" ${line.isNew ? "selected" : ""}>+ New ${escapeHtml(recordNoun("inventory").toLowerCase())} (add to ${escapeHtml(
+                    viewTitle("inventory").toLowerCase(),
+                  )})</option>`
+                : ""
+            }
             ${items
               .map(
                 (item) =>
@@ -6415,11 +7318,23 @@ function renderTradeForm() {
                   } · ${formatNumber(item.quantity)} in stock</option>`,
               )
               .join("")}
-            <option value="__custom__" ${line.custom ? "selected" : ""}>Other item or service (not in stock)</option>
+            <option value="__custom__" ${line.custom ? "selected" : ""}>${
+              kind === "purchase" ? "Other expense or service (not stock)" : "Other item or service (not in stock)"
+            }</option>
           </select>
           ${
             line.custom
               ? `<input name="line-desc-${line.key}" type="text" value="${escapeHtml(line.description)}" placeholder="Describe the item or service" />`
+              : ""
+          }
+          ${
+            line.isNew
+              ? `<div class="trade-new-item">
+                  <input name="line-new-name-${line.key}" type="text" value="${escapeHtml(line.newName)}" placeholder="${escapeHtml(fieldLabel("inventory", "name"))} *" />
+                  <input name="line-new-sku-${line.key}" type="text" value="${escapeHtml(line.newSku)}" placeholder="${escapeHtml(fieldLabel("inventory", "sku"))} (auto if blank)" />
+                  <input name="line-new-category-${line.key}" type="text" value="${escapeHtml(line.newCategory)}" placeholder="${escapeHtml(fieldLabel("inventory", "category"))}" list="tradeCategoryList" />
+                  <input name="line-new-sell-${line.key}" type="number" min="0" step="0.01" value="${escapeHtml(line.newSellPrice)}" placeholder="${escapeHtml(fieldLabel("inventory", "sellPrice"))}" />
+                </div>`
               : ""
           }
           <small data-line-hint="${line.key}">${escapeHtml(tradeLineHint(kind, line))}</small>
@@ -6454,10 +7369,13 @@ function renderTradeForm() {
     </label>
   `;
 
+  const tradeHelp = TRADE_SECTION_HELP[kind];
   els.recordForm.innerHTML = `
     <div class="form-error" id="formError" hidden></div>
+    ${formHelpBarHtml(`Four steps: who, what, payment, and details. The ${config.noun.toLowerCase()} number is created automatically.`)}
     <fieldset class="form-section">
       <legend>${config.party}</legend>
+      ${sectionHelpHtml(tradeHelp.party)}
       <div class="form-grid">
         <div class="field full">
           <label for="tradeContact">${kind === "sale" ? "Sold to" : "Bought from"}</label>
@@ -6496,12 +7414,16 @@ function renderTradeForm() {
 
     <fieldset class="form-section">
       <legend>${kind === "sale" ? "What was sold" : "What was bought"}</legend>
+      ${sectionHelpHtml(tradeHelp.lines)}
       ${
         hiddenItems
           ? `<p class="muted-note trade-note">${hiddenItems} ${escapeHtml(viewTitle("inventory").toLowerCase())} priced in other currencies are hidden. Change the currency below to use them.</p>`
           : ""
       }
       <div class="trade-lines">${lineRows}</div>
+      <datalist id="tradeCategoryList">${[...new Set(state.inventory.map((item) => item.category).filter(Boolean))]
+        .map((category) => `<option value="${escapeHtml(category)}"></option>`)
+        .join("")}</datalist>
       <button type="button" class="button ghost small" data-trade-add-line>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
         Add another line
@@ -6515,6 +7437,7 @@ function renderTradeForm() {
 
     <fieldset class="form-section">
       <legend>Payment</legend>
+      ${sectionHelpHtml(tradeHelp.payment)}
       <div class="form-grid">
         <div class="field">
           <label for="tradeDate">Date</label>
@@ -6563,6 +7486,7 @@ function renderTradeForm() {
 
     <fieldset class="form-section">
       <legend>Details</legend>
+      ${sectionHelpHtml(tradeHelp.details)}
       <div class="form-grid">
         <div class="field">
           <label for="tradeReference">${kind === "purchase" ? "Supplier bill / invoice no." : "Reference (optional)"}</label>
@@ -6580,6 +7504,7 @@ function renderTradeForm() {
       <button class="button primary" type="submit" id="tradeSubmitBtn">Save ${config.noun.toLowerCase()} · ${escapeHtml(money(totals.total))}</button>
     </div>
   `;
+  applyFieldHelpVisibility();
 }
 
 function tradeBalanceNote(kind, totals, draft) {
@@ -6631,19 +7556,30 @@ function captureTradeForm() {
     const selected = value(`line-item-${line.key}`);
     if (selected !== undefined) {
       const custom = selected === "__custom__";
-      const itemId = custom ? "" : selected;
-      if (custom !== line.custom || itemId !== line.itemId) {
+      const isNew = selected === "__new__";
+      const itemId = custom || isNew ? "" : selected;
+      if (custom !== line.custom || isNew !== Boolean(line.isNew) || itemId !== line.itemId) {
         line.custom = custom;
+        line.isNew = isNew;
         line.itemId = itemId;
         if (!line.priceTouched || isBlank(line.unitPrice)) {
           const item = state.inventory.find((entry) => entry.id === itemId);
-          line.unitPrice = custom ? "" : tradeItemPrice(kind, item);
+          line.unitPrice = custom || isNew ? "" : tradeItemPrice(kind, item);
           line.priceTouched = false;
         }
       }
     }
     const description = value(`line-desc-${line.key}`);
     if (description !== undefined) line.description = description;
+    [
+      ["newName", "name"],
+      ["newSku", "sku"],
+      ["newCategory", "category"],
+      ["newSellPrice", "sell"],
+    ].forEach(([key, suffix]) => {
+      const typed = value(`line-new-${suffix}-${line.key}`);
+      if (typed !== undefined) line[key] = typed;
+    });
     const quantity = value(`line-qty-${line.key}`);
     if (quantity !== undefined) line.quantity = quantity;
   });
@@ -6695,11 +7631,11 @@ function prepareTrade(kind, draft) {
   const lines = [];
   const quantityByItem = {};
   for (const [index, line] of draft.lines.entries()) {
-    const empty = !line.itemId && !line.custom && isBlank(line.description);
+    const empty = !line.itemId && !line.custom && !line.isNew && isBlank(line.description);
     if (empty && (isBlank(line.quantity) || parseMoney(line.quantity) === 1) && isBlank(line.unitPrice)) continue;
     const label = `Line ${index + 1}`;
     const quantity = parseMoney(line.quantity);
-    if (!line.itemId && !line.custom) return { error: `${label}: choose what was ${kind === "sale" ? "sold" : "bought"}.` };
+    if (!line.itemId && !line.custom && !line.isNew) return { error: `${label}: choose what was ${kind === "sale" ? "sold" : "bought"}.` };
     if (quantity <= 0) return { error: `${label}: enter a quantity above zero.` };
     if (isBlank(line.unitPrice)) return { error: `${label}: enter the ${config.priceLabel.toLowerCase()}.` };
     const unitPrice = parseMoney(line.unitPrice);
@@ -6707,6 +7643,38 @@ function prepareTrade(kind, draft) {
     if (line.custom) {
       if (isBlank(line.description)) return { error: `${label}: describe the item or service.` };
       lines.push({ itemId: "", custom: true, name: line.description.trim(), sku: "", quantity, unitPrice, listPrice: "", unitCost: "", lineTotal: round2(quantity * unitPrice) });
+      continue;
+    }
+    if (line.isNew) {
+      if (kind !== "purchase" || !can("inventory", "add")) return { error: `${label}: new items can only be added from a purchase.` };
+      const name = String(line.newName || "").trim();
+      if (!name) return { error: `${label}: enter the name of the new ${recordNoun("inventory").toLowerCase()}.` };
+      const existing = state.inventory.find((item) => item.name.trim().toLowerCase() === name.toLowerCase() && recordCurrency(item) === currency);
+      if (existing) return { error: `${label}: ${existing.name} is already in ${viewTitle("inventory")}. Choose it from the list instead.` };
+      const sku = String(line.newSku || "").trim();
+      if (sku && state.inventory.some((item) => String(item.sku || "").trim().toLowerCase() === sku.toLowerCase())) {
+        return { error: `${label}: the code ${sku} is already used by another ${recordNoun("inventory").toLowerCase()}.` };
+      }
+      if (!isBlank(line.newSellPrice) && parseMoney(line.newSellPrice) < 0) return { error: `${label}: the sell price can't be negative.` };
+      if (lines.some((entry) => entry.newItem && entry.name.toLowerCase() === name.toLowerCase())) {
+        return { error: `${label}: ${name} is entered twice. Put the full quantity on one line.` };
+      }
+      lines.push({
+        itemId: "",
+        custom: false,
+        name,
+        sku,
+        quantity,
+        unitPrice,
+        listPrice: "",
+        unitCost: unitPrice,
+        lineTotal: round2(quantity * unitPrice),
+        newItem: {
+          sku,
+          category: String(line.newCategory || "").trim(),
+          sellPrice: isBlank(line.newSellPrice) ? "" : round2(parseMoney(line.newSellPrice)),
+        },
+      });
       continue;
     }
     const item = state.inventory.find((entry) => entry.id === line.itemId);
@@ -6831,16 +7799,53 @@ function createTrade(kind, draft) {
     status: "Completed",
     payments:
       prepared.paid > 0
-        ? [{ id: makeId("payment"), date: draft.date, amount: prepared.paid, method: draft.method || "Cash", note: `Paid when the ${config.noun.toLowerCase()} was recorded`, by: user?.name || "" }]
+        ? [
+            {
+              id: makeId("payment"),
+              date: draft.date,
+              amount: prepared.paid,
+              method: draft.method || "Cash",
+              note: `Paid when the ${config.noun.toLowerCase()} was recorded`,
+              by: user?.name || "",
+              at: now,
+              receiptNumber: nextReceiptNumber(kind === "sale" ? "in" : "out"),
+            },
+          ]
         : [],
     createdAt: now,
     createdBy: user?.name || "",
   };
 
   prepared.lines.forEach((line) => {
+    if (!line.newItem) return;
+    // A new item bought for the first time is added to the item list with no stock;
+    // the purchase below then brings its stock in, so its history starts with this purchase.
+    const item = {
+      id: makeId("inventory"),
+      name: line.name,
+      sku: line.newItem.sku || nextItemCode(),
+      category: line.newItem.category || "General",
+      quantity: 0,
+      reorderLevel: "",
+      location: "",
+      unitCost: "",
+      sellPrice: line.newItem.sellPrice,
+      currency: prepared.currency,
+      notes: "",
+      sourceName: `Added from purchase ${number}`,
+      createdAt: now,
+    };
+    state.inventory.unshift(item);
+    line.itemId = item.id;
+    line.sku = item.sku;
+    line.addedToStock = true;
+    delete line.newItem;
+  });
+
+  prepared.lines.forEach((line) => {
     if (line.custom) return;
     const item = state.inventory.find((entry) => entry.id === line.itemId);
-    const extra = {};
+    const extra = line.addedToStock ? { newItem: true } : {};
     if (kind === "purchase") {
       // The item's cost becomes the weighted average of stock on hand and this purchase.
       const onHand = Math.max(0, parseMoney(item.quantity));
@@ -6893,6 +7898,10 @@ function createTrade(kind, draft) {
   }
 
   state[config.list].unshift(trade);
+  const added = prepared.lines.filter((line) => line.addedToStock);
+  if (added.length) {
+    addActivity(`New ${viewTitle("inventory").toLowerCase()} added from purchase ${number}: ${added.map((line) => line.name).join(", ")}`, "inventory");
+  }
   addActivity(
     `${config.noun} ${number}: ${partyName || "walk-in"} · ${formatCurrency(prepared.total, prepared.currency)}${
       prepared.balance > 0 ? ` (${formatCurrency(prepared.balance, prepared.currency)} unpaid)` : ""
@@ -6915,7 +7924,12 @@ function submitTrade() {
   rememberTab(TRADE[kind].area, "all");
   if (currentView !== TRADE[kind].area && canOpenView(TRADE[kind].area)) setView(TRADE[kind].area);
   else render();
-  showToast(`${TRADE[kind].noun} ${result.trade.number} saved`);
+  const added = result.trade.lines.filter((line) => line.addedToStock).length;
+  showToast(
+    `${TRADE[kind].noun} ${result.trade.number} saved${
+      added ? ` · ${added} new ${added === 1 ? recordNoun("inventory").toLowerCase() : viewTitle("inventory").toLowerCase()} added` : ""
+    }`,
+  );
 }
 
 /* ----- Payments ----- */
@@ -6978,8 +7992,22 @@ function openPaymentModal(financeId) {
   byId("paymentAmount").focus();
 }
 
-function applyPayment(entry, amount, { date, method, note = "" }) {
-  const payment = { id: makeId("payment"), date, amount, method, note, by: currentUser()?.name || "" };
+function nextReceiptNumber(direction) {
+  return direction === "in" ? nextDocumentNumber("receipt", "RCPT") : nextDocumentNumber("paymentOut", "PAY");
+}
+
+function applyPayment(entry, amount, { date, method, note = "", receiptNumber = "", groupId = "" }) {
+  const payment = {
+    id: makeId("payment"),
+    date,
+    amount,
+    method,
+    note,
+    by: currentUser()?.name || "",
+    at: new Date().toISOString(),
+    receiptNumber: receiptNumber || nextReceiptNumber(entry.type === "Income" ? "in" : "out"),
+    ...(groupId ? { groupId } : {}),
+  };
   entry.amountPaid = round2(parseMoney(entry.amountPaid) + amount);
   entry.payments = [...(entry.payments || []), payment];
   if (entry.amountPaid >= parseMoney(entry.amount) - 0.005) {
@@ -7015,14 +8043,16 @@ function submitPayment() {
     return;
   }
   applyPayment(entry, amount, { date, method: form.method.value, note: form.note.value.trim() });
+  const receiptNumber = entry.payments[entry.payments.length - 1].receiptNumber;
   addActivity(
-    `${entry.type === "Income" ? "Payment received" : "Payment made"}: ${formatCurrency(amount, recordCurrency(entry))} · ${entry.party || entry.description}`,
+    `${entry.type === "Income" ? "Payment received" : "Payment made"}: ${formatCurrency(amount, recordCurrency(entry))} · ${entry.party || entry.description} (${receiptNumber})`,
     entry.sourceType ? TRADE[entry.sourceType].area : "finance",
   );
   saveState();
   closeModal();
   render();
-  showToast(outstandingOf(entry) ? "Part payment recorded" : "Fully paid");
+  showToast(`${outstandingOf(entry) ? "Part payment recorded" : "Fully paid"} · ${receiptNumber}`);
+  openDocumentFor(`receipt:${receiptNumber}`);
 }
 
 /* ----- Cancelling a sale or purchase ----- */
@@ -7248,6 +8278,9 @@ function submitTransactionForm() {
   else if (editing.kind === "payment") submitPayment();
   else if (editing.kind === "cancel") submitCancel();
   else if (editing.kind === "adjust") submitAdjustment();
+  else if (editing.kind === "partyPayment") submitPartyPayment();
+  else if (editing.kind === "salary") submitSalaryPayment();
+  else if (editing.kind === "salaryBatch") submitPayAllSalaries();
 }
 
 /* ----- Read-only details: a sale or purchase, an item's history, a contact's history ----- */
@@ -7340,9 +8373,11 @@ function openTradeDetails(kind, id) {
                 `<tr><td>${escapeHtml(formatDate(payment.date))}</td><td>${escapeHtml(payment.method || "—")}</td><td>${escapeHtml(
                   [payment.receiptNumber, payment.note, payment.by].filter(Boolean).join(" · ") || "—",
                 )}</td><td class="num">${escapeHtml(money(payment.amount))}</td><td><div class="row-actions">${
-                  entry && entry.payments?.some((item) => item.id === payment.id)
-                    ? `<button type="button" data-document="payment:${escapeHtml(entry.id)}:${escapeHtml(payment.id)}">Receipt</button>`
-                    : ""
+                  payment.receiptNumber
+                    ? `<button type="button" data-document="receipt:${escapeHtml(payment.receiptNumber)}">Receipt</button>`
+                    : entry && entry.payments?.some((item) => item.id === payment.id)
+                      ? `<button type="button" data-document="payment:${escapeHtml(entry.id)}:${escapeHtml(payment.id)}">Receipt</button>`
+                      : ""
                 }</div></td></tr>`,
             )
             .join("")}</tbody></table></div>`
@@ -7424,8 +8459,25 @@ function openContactHistory(contactId) {
             .join("")}</tbody></table></div>`
         : `<div class="empty-state">No sales or purchases recorded with ${escapeHtml(contact.name)} yet.</div>`
     }
+    <h3 class="detail-heading">Payments</h3>
+    <div class="table-wrap bordered">${paymentsTableHtml(
+      allPayments({ filter: (entry) => String(entry.party || "").trim().toLowerCase() === String(contact.name || "").trim().toLowerCase() }),
+      { emptyText: `No payments recorded with ${contact.name} yet.` },
+    )}</div>
   `;
-  openReadOnlyModal(viewTitle("contacts"), contact.name, body);
+  const dueKey = `${String(contact.name || "").trim().toLowerCase()}|${recordCurrency(contact)}`;
+  const actions = ["in", "out"]
+    .filter((direction) => findDueParty(direction, dueKey))
+    .map(
+      (direction) =>
+        `<button class="button ghost" type="button" data-document="statement:${direction}:${escapeHtml(dueKey)}">Statement</button>${
+          findDueParty(direction, dueKey).items.some(dueItemCanBePaid)
+            ? `<button class="button primary" type="button" data-party-payment="${direction}:${escapeHtml(dueKey)}">${direction === "in" ? "Receive payment" : "Pay"}</button>`
+            : ""
+        }`,
+    )
+    .join("");
+  openReadOnlyModal(viewTitle("contacts"), contact.name, body, actions);
 }
 
 function movementTableHtml(moves, { showItem = true, limit = 300 } = {}) {
@@ -7474,6 +8526,979 @@ function movementTableHtml(moves, { showItem = true, limit = 300 } = {}) {
     </div>
     ${moves.length > limit ? `<p class="muted-note">Showing the latest ${limit} of ${formatNumber(moves.length)} changes.</p>` : ""}
   `;
+}
+
+/* ---------- Payments ledger, dues by person, and payroll payments ----------
+ *
+ * Every payment lives inside the finance entry it pays (a sale's income, a purchase's
+ * expense, a salary, an opening balance, or any other entry). These helpers list them
+ * in one place, in the order they happened, and let dues be settled per person.
+ */
+
+const paymentFilters = { direction: "all", month: "all" };
+const payHistoryFilters = { employeeId: "all" };
+
+function isSalaryEntry(entry) {
+  return Boolean(entry?.employeeId && entry?.payrollMonth);
+}
+
+function canSeeFinanceEntry(entry) {
+  if (entry.sourceType && TRADE[entry.sourceType]) return can(TRADE[entry.sourceType].area, "view") || can("finance", "view");
+  if (isSalaryEntry(entry)) return (can("employees", "view") || can("finance", "view")) && canAccess("sensitiveNumbers");
+  return can("finance", "view");
+}
+
+// Payments recorded on an entry. Older entries marked paid without payment details
+// count as one payment on the day they were paid.
+function entryPayments(entry) {
+  if (Array.isArray(entry.payments) && entry.payments.length) return entry.payments;
+  if (isUnpaid(entry) || !(parseMoney(entry.amount) > 0)) return [];
+  return [
+    {
+      id: `auto-${entry.id}`,
+      date: entry.paidOn || entry.date,
+      amount: parseMoney(entry.amount),
+      method: entry.paymentMethod || "",
+      note: "",
+      by: "",
+      auto: true,
+    },
+  ];
+}
+
+function paymentSource(entry) {
+  if (entry.sourceType && TRADE[entry.sourceType]) {
+    const trade = findTrade(entry.sourceType, entry.sourceId);
+    return {
+      label: `${TRADE[entry.sourceType].noun} ${trade?.number || entry.reference || ""}`.trim(),
+      tone: entry.sourceType === "sale" ? "blue" : "green",
+      open:
+        trade && can(TRADE[entry.sourceType].area, "view")
+          ? `<button type="button" data-view-trade="${entry.sourceType}:${escapeHtml(trade.id)}">Open</button>`
+          : "",
+    };
+  }
+  if (isSalaryEntry(entry)) {
+    return {
+      label: `Salary · ${monthName(entry.payrollMonth, "long")}`,
+      tone: "violet",
+      open: canOpenView("employees") ? `<button type="button" data-open-payroll="${escapeHtml(entry.payrollMonth)}">Payroll</button>` : "",
+    };
+  }
+  if (entry.settlesContactId || entry.category === "Customer payment" || entry.category === "Supplier payment") {
+    return { label: "Opening balance", tone: "blue", open: "" };
+  }
+  return { label: entry.category || (entry.type === "Income" ? "Income" : "Expense"), tone: "amber", open: "" };
+}
+
+function allPayments({ filter = () => true } = {}) {
+  const rows = [];
+  state.finance.forEach((entry) => {
+    if (!canSeeFinanceEntry(entry) || !filter(entry)) return;
+    entryPayments(entry).forEach((payment) => {
+      rows.push({
+        entry,
+        payment,
+        direction: entry.type === "Income" ? "in" : "out",
+        currency: recordCurrency(entry),
+        amount: parseMoney(payment.amount),
+        date: payment.date || entry.date || "",
+        party: entry.party || "",
+        cancelled: Boolean(entry.cancelled),
+      });
+    });
+  });
+  return rows.sort(
+    (a, b) =>
+      String(b.date).localeCompare(String(a.date)) ||
+      String(b.payment.at || b.entry.createdAt || "").localeCompare(String(a.payment.at || a.entry.createdAt || "")),
+  );
+}
+
+function paymentDocumentRef(row) {
+  if (isSalaryEntry(row.entry)) return `salary:${row.entry.id}`;
+  if (row.payment.auto) return `finance:${row.entry.id}`;
+  if (row.payment.receiptNumber) return `receipt:${row.payment.receiptNumber}`;
+  return `payment:${row.entry.id}:${row.payment.id}`;
+}
+
+function paymentsTableHtml(rows, options = {}) {
+  const { head, body } = paymentsTableParts(rows, options);
+  return `<table class="data-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+}
+
+function paymentsTableParts(rows, { showSource = true, emptyText = "No payments recorded yet." } = {}) {
+  const columns = showSource ? 7 : 6;
+  const head = `
+    <tr>
+      <th>Date</th>
+      <th>Receipt no.</th>
+      <th>${showSource ? "Received from / paid to" : "Party"}</th>
+      ${showSource ? "<th>For</th>" : ""}
+      <th>Method</th>
+      <th class="num">Amount</th>
+      <th></th>
+    </tr>
+  `;
+  if (!rows.length) return { head, body: `<tr><td colspan="${columns}"><div class="empty-state">${escapeHtml(emptyText)}</div></td></tr>` };
+  const body = `
+        ${rows
+          .map((row) => {
+            const source = paymentSource(row.entry);
+            const signed = `${row.direction === "in" ? "+" : "−"} ${formatCurrency(row.amount, row.currency)}`;
+            return `
+            <tr class="${row.cancelled ? "is-muted" : ""}">
+              <td>${titleCell(formatDate(row.date), row.payment.by || "")}</td>
+              <td class="nowrap">${escapeHtml(row.payment.receiptNumber || (isSalaryEntry(row.entry) ? row.entry.slipNumber || "—" : "—"))}</td>
+              <td>${titleCell(row.party || "—", row.direction === "in" ? "Received" : "Paid")}</td>
+              ${
+                showSource
+                  ? `<td>${badge(source.label, source.tone)}${row.cancelled ? ` ${badge(isSalaryEntry(row.entry) ? "Reversed" : "Cancelled", "red")}` : ""}${
+                      row.payment.note ? `<div class="muted-note">${escapeHtml(row.payment.note)}</div>` : ""
+                    }</td>`
+                  : ""
+              }
+              <td>${escapeHtml(row.payment.method || "—")}</td>
+              <td class="num"><strong class="${row.direction === "in" ? "money-in" : "negative-text"}">${escapeHtml(signed)}</strong></td>
+              <td><div class="row-actions">
+                <button type="button" data-document="${escapeHtml(paymentDocumentRef(row))}">${isSalaryEntry(row.entry) ? "Salary slip" : "Receipt"}</button>
+                ${source.open}
+              </div></td>
+            </tr>
+          `;
+          })
+          .join("")}
+  `;
+  return { head, body };
+}
+
+function paymentTotalsText(rows) {
+  const live = rows.filter((row) => !row.cancelled);
+  const received = formatMoneyTotals(sumByCurrency(live.filter((row) => row.direction === "in"), (row) => row.amount));
+  const paid = formatMoneyTotals(sumByCurrency(live.filter((row) => row.direction === "out"), (row) => row.amount));
+  return { received, paid };
+}
+
+function renderPaymentsTab() {
+  const query = els.globalSearch.value.trim().toLowerCase();
+  const all = allPayments();
+  const months = [...new Set(all.map((row) => monthKeyOf(row.date)).filter(Boolean))].sort().reverse();
+  if (paymentFilters.month !== "all" && !months.includes(paymentFilters.month)) paymentFilters.month = "all";
+  byId("paymentsDirectionFilter").value = paymentFilters.direction;
+  byId("paymentsMonthFilter").innerHTML = [
+    `<option value="all">All months</option>`,
+    ...months.map((key) => `<option value="${key}" ${key === paymentFilters.month ? "selected" : ""}>${monthName(key, "long")}</option>`),
+  ].join("");
+  const rows = all.filter((row) => {
+    if (paymentFilters.direction !== "all" && row.direction !== paymentFilters.direction) return false;
+    if (paymentFilters.month !== "all" && monthKeyOf(row.date) !== paymentFilters.month) return false;
+    if (!query) return true;
+    return [row.party, row.payment.receiptNumber, row.payment.method, row.payment.note, paymentSource(row.entry).label, row.entry.description]
+      .join(" ")
+      .toLowerCase()
+      .includes(query);
+  });
+  const { received, paid } = paymentTotalsText(rows);
+  byId("paymentsSummary").innerHTML = `<strong>${formatNumber(rows.length)}</strong> payments · Received <strong class="money-in">${escapeHtml(
+    received,
+  )}</strong> · Paid out <strong class="negative-text">${escapeHtml(paid)}</strong>`;
+  const { head, body } = paymentsTableParts(rows, {
+    emptyText: all.length ? "No payments match this view." : "No payments yet. Payments appear here when sales, purchases, dues, and salaries are paid.",
+  });
+  byId("paymentsHead").innerHTML = head;
+  byId("paymentsLedger").innerHTML = body;
+}
+
+function renderTradePayments(kind) {
+  const config = TRADE[kind];
+  const query = els.globalSearch.value.trim().toLowerCase();
+  const period = tradeFilters[config.area];
+  byId(`${config.area}PeriodFilter`).value = period;
+  const rows = allPayments({ filter: (entry) => entry.sourceType === kind }).filter((row) => {
+    if (!inPeriod(row.date, period)) return false;
+    if (!query) return true;
+    return [row.party, row.payment.receiptNumber, row.payment.method, row.payment.note, row.entry.reference].join(" ").toLowerCase().includes(query);
+  });
+  const { head, body } = paymentsTableParts(rows, {
+    emptyText: kind === "sale" ? "No payments received for sales in this period." : "No payments made for purchases in this period.",
+  });
+  byId(`${config.area}Head`).innerHTML = head;
+  byId(`${config.area}Table`).innerHTML = body;
+  const { received, paid } = paymentTotalsText(rows);
+  byId(`${config.area}TableSummary`).innerHTML = `<strong>${formatNumber(rows.length)}</strong> payments · ${
+    kind === "sale" ? `Received <strong>${escapeHtml(received)}</strong>` : `Paid <strong>${escapeHtml(paid)}</strong>`
+  }`;
+}
+
+/* ----- Dues grouped by person ----- */
+
+function duePartyKey(item) {
+  return `${String(item.party || "").trim().toLowerCase()}|${item.currency}`;
+}
+
+function dueParties(items) {
+  const groups = new Map();
+  items
+    .filter((item) => item.kind !== "salary")
+    .forEach((item) => {
+      const key = duePartyKey(item);
+      if (!groups.has(key)) groups.set(key, { key, party: item.party || "", currency: item.currency, items: [], total: 0, overdue: 0 });
+      const group = groups.get(key);
+      group.items.push(item);
+      group.total = round2(group.total + item.amount);
+      if (item.overdue) group.overdue += 1;
+    });
+  return [...groups.values()].sort((a, b) => b.overdue - a.overdue || b.total - a.total);
+}
+
+// Oldest first: opening balances, then by date.
+function allocationOrder(items) {
+  return [...items].sort(
+    (a, b) =>
+      Number(b.kind === "balance") - Number(a.kind === "balance") ||
+      String(a.date || a.dueDate || "").localeCompare(String(b.date || b.dueDate || "")),
+  );
+}
+
+function dueItemCanBePaid(item) {
+  if (item.kind === "transaction") return canTakePayment(state.finance.find((entry) => entry.id === item.id));
+  if (item.kind === "balance") return can("finance", "add");
+  return false;
+}
+
+function dueItemLinks(item) {
+  if (item.kind !== "transaction") return "";
+  const entry = state.finance.find((record) => record.id === item.id);
+  if (!entry) return "";
+  const source = paymentSource(entry);
+  return `${source.open}<button type="button" data-document="finance:${escapeHtml(entry.id)}">Invoice</button>`;
+}
+
+function duePartyHtml(group, direction) {
+  const payable = group.items.some(dueItemCanBePaid);
+  const name = group.party || (direction === "in" ? "No name recorded" : "No name recorded");
+  return `
+    <div class="due-party ${group.overdue ? "overdue" : ""}">
+      <div class="due-party-head">
+        <div>
+          <strong>${escapeHtml(name)}</strong>
+          <span>${group.items.length} open${group.overdue ? ` · ${group.overdue} overdue` : ""}</span>
+        </div>
+        <div class="due-side">
+          <span class="due-amount">${escapeHtml(formatCurrency(group.total, group.currency))}</span>
+          <div class="row-actions">
+            <button type="button" data-document="statement:${direction}:${escapeHtml(group.key)}">Statement</button>
+            ${
+              payable
+                ? `<button type="button" class="accent" data-party-payment="${direction}:${escapeHtml(group.key)}">${direction === "in" ? "Receive payment" : "Pay"}</button>`
+                : ""
+            }
+          </div>
+        </div>
+      </div>
+      <div class="due-party-items">
+        ${allocationOrder(group.items)
+          .map((item) => {
+            const source =
+              item.kind === "balance"
+                ? badge("Opening balance", "blue")
+                : badge(paymentSource(state.finance.find((entry) => entry.id === item.id) || {}).label || "Unpaid", "amber");
+            const when = item.overdue
+              ? badge(item.dueDate ? `Overdue · due ${formatDate(item.dueDate)}` : "Overdue", "red")
+              : item.dueDate
+                ? `<span>Due ${escapeHtml(formatDate(item.dueDate))}</span>`
+                : item.date
+                  ? `<span>${escapeHtml(formatDate(item.date))}</span>`
+                  : "";
+            return `
+            <div class="due-line">
+              <div class="due-meta">${source}${when}${item.detail ? `<span>${escapeHtml(item.detail)}</span>` : ""}</div>
+              <div class="due-side">
+                <span>${escapeHtml(formatCurrency(item.amount, item.currency))}</span>
+                <div class="row-actions">
+                  ${dueItemLinks(item)}
+                  ${
+                    item.kind === "transaction" && dueItemCanBePaid(item) && group.items.length > 1
+                      ? `<button type="button" data-mark-paid="${escapeHtml(item.id)}">${direction === "in" ? "Receive" : "Pay"} this</button>`
+                      : ""
+                  }
+                </div>
+              </div>
+            </div>
+          `;
+          })
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
+function salaryDuesHtml(items) {
+  const salaries = items.filter((item) => item.kind === "salary");
+  if (!salaries.length) return "";
+  const byMonth = {};
+  salaries.forEach((item) => {
+    (byMonth[item.month] ||= []).push(item);
+  });
+  return `
+    <p class="due-group-title">Staff salaries · paid from Employees → Payroll</p>
+    ${Object.keys(byMonth)
+      .sort()
+      .map((month) => {
+        const list = byMonth[month];
+        const late = list.some((item) => item.overdue);
+        return `
+        <div class="due-item ${late ? "overdue" : ""}">
+          <div>
+            <strong>Salaries for ${escapeHtml(monthName(month, "long"))}</strong>
+            <span>${list.length} employee${list.length === 1 ? "" : "s"}: ${escapeHtml(list.slice(0, 3).map((item) => item.party).join(", "))}${
+              list.length > 3 ? "…" : ""
+            }</span>
+            <div class="due-meta">${badge("Salary", "violet")}${late ? badge("Overdue", "red") : ""}</div>
+          </div>
+          <div class="due-side">
+            <span class="due-amount">${escapeHtml(formatMoneyTotals(duesTotals(list)))}</span>
+            ${canOpenView("employees") ? `<div class="row-actions"><button type="button" class="accent" data-open-payroll="${month}">Open payroll</button></div>` : ""}
+          </div>
+        </div>
+      `;
+      })
+      .join("")}
+  `;
+}
+
+function duePartyListHtml(items, direction) {
+  const groups = dueParties(items);
+  const salaries = direction === "out" ? salaryDuesHtml(items) : "";
+  if (!groups.length && !salaries) {
+    return `<div class="empty-state">${direction === "in" ? "Nobody owes the business anything right now." : "Nothing to pay right now."}</div>`;
+  }
+  return `${groups.map((group) => duePartyHtml(group, direction)).join("")}${salaries}`;
+}
+
+function findDueParty(direction, key) {
+  const dues = buildDues();
+  return dueParties(direction === "in" ? dues.receivables : dues.payables).find((group) => group.key === key) || null;
+}
+
+function openPartyPayment(direction, key) {
+  const group = findDueParty(direction, key);
+  if (!group) {
+    showToast("Nothing is owed here any more");
+    render();
+    return;
+  }
+  const items = allocationOrder(group.items).filter(dueItemCanBePaid);
+  if (!items.length) {
+    showToast("Your role cannot record payments for these dues");
+    return;
+  }
+  const payableTotal = round2(items.reduce((sum, item) => sum + item.amount, 0));
+  const incoming = direction === "in";
+  editing = { kind: "partyPayment", direction, key };
+  setModalWide(false);
+  els.modalKicker.textContent = "Dues";
+  els.modalTitle.textContent = incoming ? `Receive payment from ${group.party || "customer"}` : `Pay ${group.party || "supplier"}`;
+  els.recordForm.innerHTML = `
+    <div class="form-error" id="formError" hidden></div>
+    <div class="detail-grid">
+      <div><span>${incoming ? "From" : "To"}</span><strong>${escapeHtml(group.party || "—")}</strong></div>
+      <div><span>Open items</span><strong>${items.length}</strong></div>
+      <div><span>Total ${incoming ? "owed to you" : "you owe"}</span><strong class="negative-text">${escapeHtml(formatCurrency(payableTotal, group.currency))}</strong></div>
+    </div>
+    <fieldset class="form-section">
+      <legend>Payment</legend>
+      <div class="form-grid">
+        <div class="field">
+          <label for="partyPaymentAmount">Amount (${group.currency}) *</label>
+          <input id="partyPaymentAmount" name="amount" type="number" min="0" step="0.01" max="${payableTotal}" value="${payableTotal}" required data-party-allocation />
+          <small>Enter less for a part payment. It pays the oldest items first.</small>
+        </div>
+        <div class="field">
+          <label for="partyPaymentDate">Date</label>
+          <input id="partyPaymentDate" name="date" type="date" value="${todayIso()}" max="${todayIso()}" />
+        </div>
+        <div class="field">
+          <label for="partyPaymentMethod">Method</label>
+          <select id="partyPaymentMethod" name="method">${PAYMENT_METHODS.map((method) => `<option>${method}</option>`).join("")}</select>
+        </div>
+        <div class="field">
+          <label for="partyPaymentNote">Note</label>
+          <input id="partyPaymentNote" name="note" type="text" placeholder="Cheque no., transfer ID, …" />
+        </div>
+      </div>
+    </fieldset>
+    <fieldset class="form-section">
+      <legend>How it will be applied</legend>
+      <div id="partyAllocation">${allocationPreviewHtml(items, payableTotal, group.currency)}</div>
+    </fieldset>
+    <div class="form-actions">
+      <button class="button ghost" id="cancelFormBtn" type="button">Cancel</button>
+      <button class="button primary" type="submit">Save payment</button>
+    </div>
+  `;
+  els.modalBackdrop.hidden = false;
+  byId("partyPaymentAmount").focus();
+}
+
+function allocate(items, amount) {
+  let remaining = round2(amount);
+  return items.map((item) => {
+    const take = round2(Math.max(0, Math.min(remaining, item.amount)));
+    remaining = round2(remaining - take);
+    return { item, take };
+  });
+}
+
+function dueItemLabel(item) {
+  if (item.kind === "balance") return "Opening balance";
+  const entry = state.finance.find((record) => record.id === item.id);
+  return entry ? paymentSource(entry).label : item.title;
+}
+
+function allocationPreviewHtml(items, amount, currency) {
+  return `
+    <div class="allocation-list">
+      ${allocate(items, amount)
+        .map(
+          ({ item, take }) => `
+        <div class="allocation-row ${take ? "" : "is-muted"}">
+          <span>${escapeHtml(dueItemLabel(item))}${item.dueDate ? ` · due ${escapeHtml(formatDate(item.dueDate))}` : ""}</span>
+          <span>${escapeHtml(formatCurrency(take, currency))} of ${escapeHtml(formatCurrency(item.amount, currency))}${
+            take && take < item.amount ? " · part" : take ? " · settled" : ""
+          }</span>
+        </div>`,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function refreshPartyAllocation() {
+  if (editing?.kind !== "partyPayment") return;
+  const group = findDueParty(editing.direction, editing.key);
+  if (!group) return;
+  const items = allocationOrder(group.items).filter(dueItemCanBePaid);
+  byId("partyAllocation").innerHTML = allocationPreviewHtml(items, parseMoney(byId("partyPaymentAmount").value), group.currency);
+}
+
+function submitPartyPayment() {
+  const { direction, key } = editing;
+  const group = findDueParty(direction, key);
+  const form = els.recordForm.elements;
+  if (!group) {
+    showFormError("These dues have changed. Close this window and try again.");
+    return;
+  }
+  const items = allocationOrder(group.items).filter(dueItemCanBePaid);
+  const payableTotal = round2(items.reduce((sum, item) => sum + item.amount, 0));
+  const amount = round2(parseMoney(form.amount.value));
+  const date = form.date.value || todayIso();
+  const method = form.method.value;
+  const note = form.note.value.trim();
+  if (!(amount > 0) || amount > payableTotal + 0.005) {
+    showFormError(`Enter an amount above zero and up to ${formatCurrency(payableTotal, group.currency)}.`);
+    return;
+  }
+  if (date > todayIso()) {
+    showFormError("The payment date can't be in the future.");
+    return;
+  }
+  const receiptNumber = nextReceiptNumber(direction);
+  const groupId = makeId("receipt");
+  const user = currentUser();
+  const now = new Date().toISOString();
+  allocate(items, amount).forEach(({ item, take }) => {
+    if (!take) return;
+    if (item.kind === "transaction") {
+      const entry = state.finance.find((record) => record.id === item.id);
+      applyPayment(entry, take, { date, method, note, receiptNumber, groupId });
+      return;
+    }
+    // Opening balance: record the money as its own paid entry and reduce the balance.
+    const contact = state.contacts.find((record) => record.id === item.id);
+    if (!contact) return;
+    const balance = parseMoney(contact.balance);
+    contact.balance = round2(Math.sign(balance) * Math.max(0, Math.abs(balance) - take));
+    state.finance.unshift({
+      id: makeId("finance"),
+      date,
+      type: direction === "in" ? "Income" : "Expense",
+      category: direction === "in" ? "Customer payment" : "Supplier payment",
+      description: `Opening balance ${direction === "in" ? "received from" : "paid to"} ${contact.name}`,
+      amount: take,
+      amountPaid: take,
+      currency: group.currency,
+      status: "Paid",
+      paidOn: date,
+      party: contact.name,
+      settlesContactId: contact.id,
+      payments: [{ id: makeId("payment"), date, amount: take, method, note, by: user?.name || "", at: now, receiptNumber, groupId }],
+      sourceName: "Dues",
+      createdAt: now,
+      infoDismissed: true,
+    });
+  });
+  addActivity(
+    `${direction === "in" ? "Payment received from" : "Payment made to"} ${group.party || "—"}: ${formatCurrency(amount, group.currency)} (${receiptNumber})`,
+    "finance",
+  );
+  saveState();
+  closeModal();
+  render();
+  showToast(`Payment saved · ${receiptNumber}`);
+  openDocumentFor(`receipt:${receiptNumber}`);
+}
+
+/* ----- Payroll payments ----- */
+
+function openSalaryPayment(employeeId, month) {
+  const employee = state.employees.find((record) => record.id === employeeId);
+  if (!employee || !can("finance", "add") || !canAccess("sensitiveNumbers")) {
+    showToast("Your role cannot pay salaries");
+    return;
+  }
+  if (salaryPayment(employee, month)) {
+    showToast(`${employee.name} is already paid for ${monthName(month, "long")}`);
+    return;
+  }
+  const salary = parseMoney(employee.salary);
+  if (!salary) {
+    showToast("Set this employee's salary first");
+    return;
+  }
+  const currency = recordCurrency(employee);
+  editing = { kind: "salary", employeeId, month };
+  setModalWide(false);
+  els.modalKicker.textContent = viewTitle("employees");
+  els.modalTitle.textContent = `Pay ${employee.name}`;
+  els.recordForm.innerHTML = `
+    <div class="form-error" id="formError" hidden></div>
+    <div class="detail-grid">
+      <div><span>Employee</span><strong>${escapeHtml(employee.name)}</strong><small>${escapeHtml([employee.role, employee.department].filter(Boolean).join(" · "))}</small></div>
+      <div><span>Salary for</span><strong>${escapeHtml(monthName(month, "long"))}</strong></div>
+      <div><span>Monthly salary</span><strong>${escapeHtml(formatCurrency(salary, currency))}</strong></div>
+    </div>
+    <fieldset class="form-section">
+      <legend>Payment</legend>
+      <div class="form-grid">
+        <div class="field">
+          <label for="salaryBonus">Bonus / overtime (${currency})</label>
+          <input id="salaryBonus" name="bonus" type="number" min="0" step="0.01" placeholder="0" data-salary-net />
+        </div>
+        <div class="field">
+          <label for="salaryDeduction">Deductions (${currency})</label>
+          <input id="salaryDeduction" name="deduction" type="number" min="0" step="0.01" placeholder="0" data-salary-net />
+          <small>Advances, absences, fines…</small>
+        </div>
+        <div class="field">
+          <label for="salaryDate">Date paid</label>
+          <input id="salaryDate" name="date" type="date" value="${todayIso()}" max="${todayIso()}" />
+        </div>
+        <div class="field">
+          <label for="salaryMethod">Method</label>
+          <select id="salaryMethod" name="method">${PAYMENT_METHODS.map((method) => `<option>${method}</option>`).join("")}</select>
+        </div>
+        <div class="field full">
+          <label for="salaryNote">Note</label>
+          <input id="salaryNote" name="note" type="text" placeholder="Reason for bonus or deduction" />
+        </div>
+        <div class="field full"><div class="trade-balance" id="salaryNet">Net pay: <strong>${escapeHtml(formatCurrency(salary, currency))}</strong></div></div>
+      </div>
+    </fieldset>
+    <div class="form-actions">
+      <button class="button ghost" id="cancelFormBtn" type="button">Cancel</button>
+      <button class="button primary" type="submit">Pay and create salary slip</button>
+    </div>
+  `;
+  els.modalBackdrop.hidden = false;
+}
+
+function salaryNetFromForm(employee) {
+  const form = els.recordForm.elements;
+  const bonus = round2(Math.max(0, parseMoney(form.bonus?.value)));
+  const deduction = round2(Math.max(0, parseMoney(form.deduction?.value)));
+  return { bonus, deduction, net: round2(parseMoney(employee.salary) + bonus - deduction) };
+}
+
+function refreshSalaryNet() {
+  if (editing?.kind !== "salary") return;
+  const employee = state.employees.find((record) => record.id === editing.employeeId);
+  if (!employee) return;
+  const { net } = salaryNetFromForm(employee);
+  byId("salaryNet").innerHTML = `Net pay: <strong>${escapeHtml(formatCurrency(net, recordCurrency(employee)))}</strong>`;
+}
+
+function recordSalaryPayment(employee, month, { date, method, note = "", bonus = 0, deduction = 0 }) {
+  const currency = recordCurrency(employee);
+  const base = parseMoney(employee.salary);
+  const amount = round2(base + bonus - deduction);
+  const slipNumber = nextDocumentNumber("salary", "SAL");
+  const now = new Date().toISOString();
+  const entry = {
+    id: makeId("finance"),
+    date,
+    type: "Expense",
+    category: "Salaries",
+    description: `Salary - ${employee.name} - ${monthName(month, "long")}`,
+    amount,
+    amountPaid: amount,
+    currency,
+    status: "Paid",
+    party: employee.name,
+    employeeId: employee.id,
+    payrollMonth: month,
+    baseSalary: base,
+    bonus,
+    deduction,
+    slipNumber,
+    paidOn: date,
+    notes: note,
+    payments: [{ id: makeId("payment"), date, amount, method, note, by: currentUser()?.name || "", at: now, receiptNumber: slipNumber }],
+    sourceName: "Payroll",
+    createdAt: now,
+    infoDismissed: true,
+  };
+  state.finance.unshift(entry);
+  return entry;
+}
+
+function submitSalaryPayment() {
+  const { employeeId, month } = editing;
+  const employee = state.employees.find((record) => record.id === employeeId);
+  const form = els.recordForm.elements;
+  if (!employee || salaryPayment(employee, month)) {
+    showFormError("This salary has already been paid.");
+    return;
+  }
+  const { bonus, deduction, net } = salaryNetFromForm(employee);
+  const date = form.date.value || todayIso();
+  if (net <= 0) {
+    showFormError("Deductions can't be more than the salary and bonus.");
+    return;
+  }
+  if (date > todayIso()) {
+    showFormError("The payment date can't be in the future.");
+    return;
+  }
+  const entry = recordSalaryPayment(employee, month, { date, method: form.method.value, note: form.note.value.trim(), bonus, deduction });
+  addActivity(`Salary paid: ${employee.name} · ${formatCurrency(net, entry.currency)} for ${monthName(month, "long")} (${entry.slipNumber})`, "employees");
+  saveState();
+  closeModal();
+  render();
+  showToast(`${employee.name}'s salary paid · ${entry.slipNumber}`);
+  openDocumentFor(`salary:${entry.id}`);
+}
+
+function openPayAllSalaries(month) {
+  const unpaid = payrollRows(month)
+    .filter((row) => row.unpaid)
+    .map((row) => row.employee);
+  if (!unpaid.length || !can("finance", "add")) return;
+  editing = { kind: "salaryBatch", month };
+  setModalWide(false);
+  els.modalKicker.textContent = viewTitle("employees");
+  els.modalTitle.textContent = `Pay salaries for ${monthName(month, "long")}`;
+  els.recordForm.innerHTML = `
+    <div class="form-error" id="formError" hidden></div>
+    <div class="allocation-list">
+      ${unpaid
+        .map(
+          (employee) => `<div class="allocation-row"><span>${escapeHtml(employee.name)}${employee.role ? ` · ${escapeHtml(employee.role)}` : ""}</span><span>${escapeHtml(
+            formatRecordMoney(employee, employee.salary),
+          )}</span></div>`,
+        )
+        .join("")}
+      <div class="allocation-row total"><span>Total</span><span>${escapeHtml(formatMoneyTotals(sumByCurrency(unpaid, (employee) => parseMoney(employee.salary))))}</span></div>
+    </div>
+    <fieldset class="form-section">
+      <legend>Payment</legend>
+      <div class="form-grid">
+        <div class="field">
+          <label for="batchSalaryDate">Date paid</label>
+          <input id="batchSalaryDate" name="date" type="date" value="${todayIso()}" max="${todayIso()}" />
+        </div>
+        <div class="field">
+          <label for="batchSalaryMethod">Method</label>
+          <select id="batchSalaryMethod" name="method">${PAYMENT_METHODS.map((method) => `<option>${method}</option>`).join("")}</select>
+        </div>
+      </div>
+      <p class="muted-note">Each employee gets their own salary slip. Use Pay salary on one employee to add a bonus or deduction.</p>
+    </fieldset>
+    <div class="form-actions">
+      <button class="button ghost" id="cancelFormBtn" type="button">Cancel</button>
+      <button class="button primary" type="submit">Pay ${unpaid.length} salar${unpaid.length === 1 ? "y" : "ies"}</button>
+    </div>
+  `;
+  els.modalBackdrop.hidden = false;
+}
+
+function submitPayAllSalaries() {
+  const { month } = editing;
+  const form = els.recordForm.elements;
+  const date = form.date.value || todayIso();
+  if (date > todayIso()) {
+    showFormError("The payment date can't be in the future.");
+    return;
+  }
+  const unpaid = payrollRows(month)
+    .filter((row) => row.unpaid)
+    .map((row) => row.employee);
+  const entries = unpaid.map((employee) => recordSalaryPayment(employee, month, { date, method: form.method.value }));
+  const total = formatMoneyTotals(sumByCurrency(entries, (entry) => entry.amount));
+  addActivity(`Paid ${entries.length} salaries for ${monthName(month, "long")} (${total})`, "employees");
+  saveState();
+  closeModal();
+  render();
+  showToast(`${entries.length} salar${entries.length === 1 ? "y" : "ies"} paid · slips in Pay history`);
+}
+
+function reverseSalaryPayment(entryId) {
+  const entry = state.finance.find((record) => record.id === entryId);
+  if (!entry || !isSalaryEntry(entry) || entry.cancelled || !can("finance", "edit")) return;
+  const reason = window.prompt(
+    `Undo ${entry.party}'s salary for ${monthName(entry.payrollMonth, "long")}? The payment stays in the records marked as reversed, and the month shows as unpaid again.\n\nReason:`,
+  );
+  if (reason === null) return;
+  if (!reason.trim()) {
+    showToast("Enter a reason to undo a salary payment");
+    return;
+  }
+  entry.cancelled = true;
+  entry.cancelReason = reason.trim();
+  entry.cancelledAt = new Date().toISOString();
+  entry.cancelledBy = currentUser()?.name || "";
+  addActivity(`Salary payment reversed: ${entry.party} · ${monthName(entry.payrollMonth, "long")} (${entry.cancelReason})`, "employees");
+  saveState();
+  render();
+  showToast("Salary payment reversed");
+}
+
+function salaryEntries(employeeId = "all") {
+  return state.finance
+    .filter((entry) => isSalaryEntry(entry) && (employeeId === "all" || entry.employeeId === employeeId))
+    .sort(
+      (a, b) =>
+        String(b.paidOn || b.date).localeCompare(String(a.paidOn || a.date)) || String(b.createdAt || "").localeCompare(String(a.createdAt || "")),
+    );
+}
+
+function renderPayHistory() {
+  const query = els.globalSearch.value.trim().toLowerCase();
+  if (payHistoryFilters.employeeId !== "all" && !state.employees.some((employee) => employee.id === payHistoryFilters.employeeId)) {
+    payHistoryFilters.employeeId = "all";
+  }
+  byId("payHistoryEmployeeFilter").innerHTML = [
+    `<option value="all">All employees</option>`,
+    ...state.employees.map(
+      (employee) =>
+        `<option value="${escapeHtml(employee.id)}" ${employee.id === payHistoryFilters.employeeId ? "selected" : ""}>${escapeHtml(employee.name)}</option>`,
+    ),
+  ].join("");
+  const rows = salaryEntries(payHistoryFilters.employeeId).filter(
+    (entry) => !query || [entry.party, entry.slipNumber, entry.notes, monthName(entry.payrollMonth, "long")].join(" ").toLowerCase().includes(query),
+  );
+  const live = rows.filter((entry) => !entry.cancelled);
+  byId("payHistorySummary").innerHTML = `<strong>${formatNumber(live.length)}</strong> salary payments · Total <strong>${escapeHtml(
+    formatMoneyTotals(sumByCurrency(live, (entry) => parseMoney(entry.amount))),
+  )}</strong>`;
+  const canUndo = can("finance", "edit");
+  byId("payHistoryTable").innerHTML = `
+    <thead>
+      <tr>
+        <th>Date paid</th>
+        <th>Slip no.</th>
+        <th>Employee</th>
+        <th>For month</th>
+        <th>Method</th>
+        <th class="num">Net pay</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      ${
+        rows.length
+          ? rows
+              .map((entry) => {
+                const payment = entryPayments(entry)[0] || {};
+                const adjustments = [entry.bonus ? `+${formatCurrency(entry.bonus, recordCurrency(entry))} bonus` : "", entry.deduction ? `−${formatCurrency(entry.deduction, recordCurrency(entry))} deducted` : ""]
+                  .filter(Boolean)
+                  .join(" · ");
+                return `
+              <tr class="${entry.cancelled ? "is-muted" : ""}">
+                <td>${titleCell(formatDate(entry.paidOn || entry.date), payment.by || "")}</td>
+                <td>${escapeHtml(entry.slipNumber || "—")}</td>
+                <td>${escapeHtml(entry.party || "—")}</td>
+                <td>${escapeHtml(monthName(entry.payrollMonth, "long"))}</td>
+                <td>${escapeHtml(payment.method || "—")}</td>
+                <td class="num">${titleCell(formatCurrency(entry.amount, recordCurrency(entry)), adjustments)}</td>
+                <td>${entry.cancelled ? badge("Reversed", "red") : badge("Paid", "green")}</td>
+                <td><div class="row-actions">
+                  <button type="button" data-document="salary:${escapeHtml(entry.id)}">Salary slip</button>
+                  ${!entry.cancelled && canUndo ? `<button type="button" class="warn" data-reverse-salary="${escapeHtml(entry.id)}">Undo</button>` : ""}
+                </div></td>
+              </tr>
+            `;
+              })
+              .join("")
+          : `<tr><td colspan="8"><div class="empty-state">No salary payments yet. Pay salaries from the Payroll tab.</div></td></tr>`
+      }
+    </tbody>
+  `;
+}
+
+/* ----- Salary slips and statements ----- */
+
+function salaryDocument(entry) {
+  const employee = state.employees.find((record) => record.id === entry.employeeId);
+  if (!entry.slipNumber) {
+    entry.slipNumber = nextDocumentNumber("salary", "SAL");
+    saveState();
+  }
+  const currency = recordCurrency(entry);
+  const payment = entryPayments(entry)[0] || {};
+  const base = entry.baseSalary !== undefined ? parseMoney(entry.baseSalary) : parseMoney(entry.amount);
+  const items = [
+    { name: `Basic salary · ${monthName(entry.payrollMonth, "long")}`, detail: employee?.role || "", quantity: 1, unitPrice: base, amount: base },
+    ...(entry.bonus ? [{ name: "Bonus / overtime", detail: entry.notes || "", quantity: 1, unitPrice: entry.bonus, amount: entry.bonus }] : []),
+    ...(entry.deduction ? [{ name: "Deductions", detail: entry.notes || "", quantity: 1, unitPrice: -entry.deduction, amount: -entry.deduction }] : []),
+  ];
+  return {
+    record: entry,
+    title: "Salary Slip",
+    receiptTitle: "Salary Slip",
+    subtitle: monthName(entry.payrollMonth, "long"),
+    number: entry.slipNumber,
+    numberLabel: "Slip no.",
+    currency,
+    meta: [
+      ["Pay period", monthName(entry.payrollMonth, "long")],
+      ["Date paid", formatDate(entry.paidOn || entry.date)],
+      ["Method", payment.method || "—"],
+      ["Paid by", payment.by || "—"],
+    ],
+    party: {
+      label: "Employee",
+      name: entry.party || employee?.name || "—",
+      lines: [employee?.role, employee?.department, employee?.phone].filter((line) => !isBlank(line)),
+    },
+    showQuantity: false,
+    priceLabel: "",
+    items,
+    totals: [
+      ["Gross", round2(base + parseMoney(entry.bonus))],
+      ...(entry.deduction ? [["Deductions", -parseMoney(entry.deduction)]] : []),
+      ["Net pay", parseMoney(entry.amount), "grand"],
+    ],
+    amountInWords: entry.amount,
+    payments: [],
+    stamp: paymentStamp(parseMoney(entry.amount), parseMoney(entry.amount), entry.cancelled),
+    cancelled: entry.cancelled ? `Reversed: ${entry.cancelReason || ""}` : "",
+    notes: entry.notes,
+    terms: "",
+    signatures: ["Employer signature", "Employee signature"],
+    thanks: "",
+  };
+}
+
+function statementDocument(direction, key) {
+  const group = findDueParty(direction, key);
+  if (!group) return null;
+  const incoming = direction === "in";
+  const items = allocationOrder(group.items).map((item) => {
+    const entry = item.kind === "transaction" ? state.finance.find((record) => record.id === item.id) : null;
+    return {
+      name: dueItemLabel(item),
+      detail: [
+        item.date ? formatDate(item.date) : "",
+        entry ? `Total ${formatCurrency(entry.amount, group.currency)} · paid ${formatCurrency(entry.amountPaid || 0, group.currency)}` : "",
+        item.dueDate ? `due ${formatDate(item.dueDate)}` : "",
+        item.overdue ? "OVERDUE" : "",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      quantity: 1,
+      unitPrice: item.amount,
+      amount: item.amount,
+    };
+  });
+  return {
+    record: {},
+    title: "Statement of Account",
+    receiptTitle: "Statement",
+    subtitle: incoming ? "Amount owed to us" : "Amount we owe",
+    number: formatDate(todayIso()),
+    numberLabel: "As of",
+    currency: group.currency,
+    meta: [
+      ["Open items", String(group.items.length)],
+      ["Overdue", String(group.overdue)],
+    ],
+    party: partyBlock(incoming ? "Customer" : "Supplier", group.party || "—", "", ""),
+    showQuantity: false,
+    priceLabel: "",
+    items,
+    totals: [["Balance due", group.total, "grand"]],
+    amountInWords: group.total,
+    payments: [],
+    stamp: { label: group.overdue ? "Overdue" : "Open", tone: group.overdue ? "unpaid" : "partial" },
+    cancelled: "",
+    notes: "",
+    terms: incoming ? "Please pay the balance due. Contact us if any item on this statement looks wrong." : "",
+    signatures: ["Authorized signature", incoming ? "Customer signature" : "Supplier signature"],
+    thanks: "",
+  };
+}
+
+function groupReceiptDocument(receiptNumber) {
+  const matches = [];
+  state.finance.forEach((entry) => {
+    (entry.payments || []).forEach((payment) => {
+      if (payment.receiptNumber === receiptNumber) matches.push({ entry, payment });
+    });
+  });
+  if (!matches.length || !canSeeFinanceEntry(matches[0].entry)) return null;
+  if (matches.length === 1 && !isSalaryEntry(matches[0].entry)) return paymentDocument(matches[0].entry, matches[0].payment.id);
+  if (isSalaryEntry(matches[0].entry)) return salaryDocument(matches[0].entry);
+  const first = matches[0];
+  const incoming = first.entry.type === "Income";
+  const currency = recordCurrency(first.entry);
+  const total = round2(matches.reduce((sum, match) => sum + parseMoney(match.payment.amount), 0));
+  return {
+    record: first.payment,
+    title: incoming ? "Payment Receipt" : "Payment Voucher",
+    receiptTitle: incoming ? "Payment Receipt" : "Payment Voucher",
+    subtitle: `Applied to ${matches.length} items`,
+    number: receiptNumber,
+    numberLabel: "Receipt no.",
+    currency,
+    meta: [
+      ["Payment date", formatDate(first.payment.date)],
+      ["Method", first.payment.method || "—"],
+      ...(first.payment.note ? [["Note", first.payment.note]] : []),
+      ["Recorded by", first.payment.by || "—"],
+    ],
+    party: partyBlock(incoming ? "Received from" : "Paid to", first.entry.party, "", ""),
+    showQuantity: false,
+    priceLabel: "",
+    items: matches.map(({ entry, payment }) => ({
+      name: paymentSource(entry).label,
+      detail: `Total ${formatCurrency(entry.amount, currency)} · balance now ${formatCurrency(outstandingOf(entry), currency)}`,
+      quantity: 1,
+      unitPrice: payment.amount,
+      amount: payment.amount,
+    })),
+    totals: [[incoming ? "Amount received" : "Amount paid", total, "grand"]],
+    amountInWords: total,
+    payments: [],
+    stamp: { label: incoming ? "Received" : "Paid", tone: "paid" },
+    cancelled: "",
+    notes: "",
+    terms: "",
+    signatures: incoming ? ["Received by", "Customer signature"] : ["Paid by", "Received by"],
+    thanks: incoming ? "Thank you for your payment." : "",
+  };
 }
 
 /* ---------- Invoices, receipts, and vouchers ----------
@@ -7627,7 +9652,7 @@ function tradeDocument(kind, trade) {
     priceLabel: sale ? "Unit price" : "Unit cost",
     items: trade.lines.map((line) => ({
       name: line.name,
-      detail: line.custom ? (sale ? "Service / not from stock" : "Not added to stock") : line.sku,
+      detail: line.custom ? (sale ? "Service / not from stock" : "Not added to stock") : [line.sku, line.addedToStock ? "New item" : ""].filter(Boolean).join(" · "),
       quantity: line.quantity,
       unitPrice: line.unitPrice,
       amount: line.lineTotal,
@@ -7700,7 +9725,7 @@ function paymentDocument(entry, paymentId) {
   if (!payment) return null;
   const trade = entry.sourceType ? findTrade(entry.sourceType, entry.sourceId) : null;
   if (!payment.receiptNumber) {
-    payment.receiptNumber = nextDocumentNumber("receipt", entry.type === "Income" ? "RCPT" : "PAY");
+    payment.receiptNumber = nextReceiptNumber(entry.type === "Income" ? "in" : "out");
     const tradePayment = trade?.payments?.find((item) => item.id === paymentId);
     if (tradePayment) tradePayment.receiptNumber = payment.receiptNumber;
     saveState();
@@ -8137,7 +10162,22 @@ function printActiveDocument() {
 }
 
 function openDocumentFor(reference) {
+  if (reference.startsWith("statement:")) {
+    const rest = reference.slice("statement:".length);
+    const direction = rest.slice(0, rest.indexOf(":"));
+    if (can("finance", "view") || can("sales", "view") || can("purchases", "view")) openDocument(statementDocument(direction, rest.slice(direction.length + 1)));
+    return;
+  }
   const [kind, id, extra] = reference.split(":");
+  if (kind === "receipt") {
+    openDocument(groupReceiptDocument(id));
+    return;
+  }
+  if (kind === "salary") {
+    const entry = state.finance.find((record) => record.id === id);
+    if (entry && isSalaryEntry(entry) && canSeeFinanceEntry(entry)) openDocument(salaryDocument(entry));
+    return;
+  }
   if (kind === "sale" || kind === "purchase") {
     const trade = findTrade(kind, id);
     if (trade && can(TRADE[kind].area, "view")) openDocument(tradeDocument(kind, trade));
@@ -8148,6 +10188,10 @@ function openDocumentFor(reference) {
     if (!entry) return;
     if (entry.sourceType) {
       openDocumentFor(`${entry.sourceType}:${entry.sourceId}`);
+      return;
+    }
+    if (isSalaryEntry(entry)) {
+      openDocumentFor(`salary:${entry.id}`);
       return;
     }
     if (can("finance", "view")) openDocument(financeDocument(entry));
@@ -8190,6 +10234,10 @@ function renderTrades(kind) {
   const query = els.globalSearch.value.trim().toLowerCase();
   const period = tradeFilters[area];
   byId(`${area}PeriodFilter`).value = period;
+  if (tab === "payments") {
+    renderTradePayments(kind);
+    return;
+  }
 
   const rows = state[config.list]
     .filter((trade) => {
@@ -8791,6 +10839,28 @@ els.tutorialBtn.addEventListener("click", () => startTutorial());
 els.tourBackBtn.addEventListener("click", () => moveTutorial(-1));
 els.tourNextBtn.addEventListener("click", () => moveTutorial(1));
 els.skipTutorialBtn.addEventListener("click", () => finishTutorial("skipped"));
+byId("muteGuidesBtn").addEventListener("click", () => {
+  const user = currentUser();
+  if (user) {
+    state.onboarding.autoGuidesOff ||= {};
+    state.onboarding.autoGuidesOff[user.id] = true;
+  }
+  finishTutorial("skipped");
+  showToast("Guides won't open automatically. Use the Guide button on any page.");
+});
+addGuideButtons();
+document.addEventListener("click", (event) => {
+  if (event.target.closest("[data-page-guide]")) {
+    startPageGuide();
+    return;
+  }
+  if (event.target.closest("[data-toggle-field-help]")) {
+    toggleFieldHelp();
+    return;
+  }
+  const fieldHelp = event.target.closest("[data-field-help]");
+  if (fieldHelp) fieldHelp.closest(".field")?.classList.toggle("help-open");
+});
 els.logoutBtn.addEventListener("click", () => {
   logout();
   showToast("Signed out");
@@ -8922,11 +10992,35 @@ document.addEventListener("click", (event) => {
   const salaryButton = target.closest("[data-pay-salary]");
   if (salaryButton) {
     const [employeeId, month] = split(salaryButton, "data-pay-salary");
-    paySalary(employeeId, month);
+    openSalaryPayment(employeeId, month);
     return;
   }
   if (target.closest("#payAllSalariesBtn")) {
-    payAllSalaries(payrollMonth || todayIso().slice(0, 7));
+    openPayAllSalaries(payrollMonth || todayIso().slice(0, 7));
+    return;
+  }
+  const payrollLink = target.closest("[data-open-payroll]");
+  if (payrollLink) {
+    payrollMonth = payrollLink.dataset.openPayroll || null;
+    closeModal();
+    openTab("employees", "payroll");
+    return;
+  }
+  const payHistoryButton = target.closest("[data-pay-history]");
+  if (payHistoryButton) {
+    payHistoryFilters.employeeId = payHistoryButton.dataset.payHistory;
+    openTab("employees", "history");
+    return;
+  }
+  const reverseSalary = target.closest("[data-reverse-salary]");
+  if (reverseSalary) {
+    reverseSalaryPayment(reverseSalary.dataset.reverseSalary);
+    return;
+  }
+  const partyPayment = target.closest("[data-party-payment]");
+  if (partyPayment) {
+    const value = partyPayment.dataset.partyPayment;
+    openPartyPayment(value.slice(0, value.indexOf(":")), value.slice(value.indexOf(":") + 1));
     return;
   }
 
@@ -9054,6 +11148,16 @@ document.addEventListener("change", (event) => {
     render();
     return;
   }
+  if (target.id === "paymentsDirectionFilter" || target.id === "paymentsMonthFilter") {
+    paymentFilters[target.id === "paymentsDirectionFilter" ? "direction" : "month"] = target.value;
+    render();
+    return;
+  }
+  if (target.id === "payHistoryEmployeeFilter") {
+    payHistoryFilters.employeeId = target.value;
+    render();
+    return;
+  }
   if (target.matches("[data-role-module]")) toggleModulePermission(target);
   else if (target.matches("[data-role-general]")) toggleGeneralPermission(target);
   else if (target.matches("[data-map-index]") && importSession) {
@@ -9074,6 +11178,8 @@ document.addEventListener("change", (event) => {
 
 document.addEventListener("input", (event) => {
   if (event.target.matches("[data-fill]")) handleImportFill(event.target);
+  if (event.target.matches("[data-party-allocation]")) refreshPartyAllocation();
+  if (event.target.matches("[data-salary-net]")) refreshSalaryNet();
   if (TRADE[editing?.kind] && event.target.closest("#recordForm") && !event.target.matches("select, [type=radio], [type=checkbox]")) {
     captureTradeForm();
     updateTradeSummary();

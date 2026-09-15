@@ -39,6 +39,29 @@ The project now has two tracks:
 Everything collected in the setup guide can be changed later under **Setup & Roles → Business**.
 Each employee sees their own tutorial the first time they sign in.
 
+**Page and tab guides.** Every page and tab (for example Setup & Roles → Business, Roles & access, Fields; Finance →
+Dues, Payments; Employees → Payroll, Pay history) has a short spotlight guide explaining what it is for and how to use
+it. It opens automatically the first time each person visits that tab, is remembered per login, and can be replayed
+with the **Guide** button on any page. "Don't open guides automatically" turns the automatic guides off.
+
+**Field help.** Every form explains each section and field under it. **Hide help** hides the explanations (remembered
+per login); the **?** next to a field still shows its help.
+
+## Automatic IDs
+
+ID fields can be left blank and are filled with the next free number when the record is saved:
+
+| Record | Field | Example |
+| --- | --- | --- |
+| Item | SKU / Code | `ITEM-0007` (prefix follows the business: `MED-`, `VEH-`, `MAT-`…) |
+| Asset | Asset Code | `AST-0003` |
+| Employee | Employee ID | `EMP-0012` |
+| Customer / Supplier | Contact ID | `CUS-0004` / `SUP-0002` |
+| Other income / expense | Reference / Voucher No. | `RV-0010` / `PV-0031` |
+
+Sales (`S-`), purchases (`P-`), receipts (`RCPT-`, `PAY-`), and salary slips (`SAL-`) are always numbered automatically.
+A typed ID must be unique; existing and imported records without an ID get one too.
+
 ## Sales, Purchases And Stock
 
 After records exist, stock and money only change through recorded transactions:
@@ -56,6 +79,23 @@ After records exist, stock and money only change through recorded transactions:
 - **Reports**: best-selling items, top customers, purchases by supplier, gross profit, and stock movement totals.
 
 An item's quantity can only be typed when the item is first created (opening stock).
+
+Buying something you have never stocked before: in **New purchase** choose **+ New item**, enter its name (code,
+category, and sell price are optional). Saving the purchase adds the item to the item list with the purchased quantity
+and cost, and its stock history starts with that purchase.
+
+## Dues, Payments And Payroll
+
+- **Finance → Dues** lists everyone who owes the business and everyone the business owes, grouped by person.
+  **Receive payment** / **Pay** settles that person's opening balance and unpaid sales or purchases, oldest first
+  (part payments allowed). **Statement** prints a statement of account.
+- Every payment is written into the sale or purchase it pays, gets a receipt number (`RCPT-` in, `PAY-` out), and
+  its receipt opens right after saving.
+- **Finance → Payments** is the full list of money received and paid, newest first. **Sales → Payments received**
+  and **Purchases → Payments made** show the same payments for their section; a customer's History shows theirs.
+- **Employees → Payroll** pays salaries (with bonus or deductions) and creates a salary slip (`SAL-`).
+  **Employees → Pay history** lists every salary paid, with slips, and **Undo** reverses a mistaken payment with a
+  reason. Salaries still count as a Salaries expense in Finance, but are managed only from Employees.
 
 ## Invoices, Receipts And Vouchers
 

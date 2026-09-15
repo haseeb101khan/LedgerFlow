@@ -3348,6 +3348,197 @@ body.has-blocking-overlay {
   flex-wrap: wrap;
 }
 
+/* Field help, section help, and page guides */
+.field-label-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.field-help-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.field-help-toggle:hover,
+.field.help-open .field-help-toggle {
+  color: var(--accent, #0e7c6b);
+  border-color: currentColor;
+}
+
+.field .field-help,
+.section-help {
+  display: none;
+}
+
+.show-help .field .field-help,
+.field.help-open .field-help,
+.show-help .section-help {
+  display: block;
+}
+
+.field .field-help {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.section-help {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.form-help-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  color: var(--text-2);
+  font-size: 12px;
+  background: var(--surface-3);
+  border-radius: var(--radius-sm);
+}
+
+.tour-mute {
+  justify-self: start;
+  margin-top: -2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.guide-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+@media (max-width: 600px) {
+  .guide-button span {
+    display: none;
+  }
+}
+
+/* Dues grouped by person, payments, and purchases of new items */
+.due-party {
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.due-party.overdue {
+  border-left: 3px solid var(--red, #d92d20);
+}
+
+.due-party-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--surface-2, var(--surface-3));
+}
+
+.due-party-head strong {
+  display: block;
+  font-size: 14px;
+}
+
+.due-party-head span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.due-party-items {
+  display: grid;
+}
+
+.due-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.due-line .due-meta {
+  margin-top: 0;
+}
+
+.due-line .due-meta span {
+  color: var(--muted);
+}
+
+.due-line .due-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.allocation-list {
+  display: grid;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.allocation-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.allocation-row:first-child {
+  border-top: 0;
+}
+
+.allocation-row.total {
+  font-weight: 700;
+  background: var(--surface-3);
+}
+
+.is-muted {
+  opacity: 0.55;
+}
+
+td.nowrap {
+  white-space: nowrap;
+}
+
+.trade-new-item {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 6px;
+}
+
+@media (max-width: 600px) {
+  .trade-new-item {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Invoice, receipt, and voucher preview */
 .document-toolbar {
   display: flex;
