@@ -1,6 +1,7 @@
 const STORAGE_KEY = "ledgerflow-erp-state-v3";
 const OLD_STORAGE_KEYS = ["ledgerflow-erp-state-v2", "ledgerflow-erp-state-v1"];
 const SESSION_KEY = "ledgerflow-session-v1";
+const DEMO_STORAGE_KEY = "ledgerflow-erp-demo-v1";
 const SHEETJS_URL = "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";
 
 const MODULES = ["inventory", "finance", "contacts", "employees", "assets"];
@@ -432,8 +433,8 @@ const LEGACY_BUSINESS_TYPES = {
   Construction: "Construction Company",
 };
 
-let state = loadState();
 let session = loadSession();
+let state = session?.userId === "guest" ? loadDemoState() : loadState();
 let previewRoleId = null;
 let currentView = "dashboard";
 let editing = null;
@@ -452,7 +453,18 @@ let tutorialMode = { type: "main" };
 const byId = (id) => document.getElementById(id);
 
 const els = {
+  homeScreen: byId("homeScreen"),
+  homeMenuBtn: byId("homeMenuBtn"),
+  homeNav: byId("homeNav"),
+  trialDialogBackdrop: byId("trialDialogBackdrop"),
+  trialDialogCloseBtn: byId("trialDialogCloseBtn"),
+  trialBlankBtn: byId("trialBlankBtn"),
+  trialBlankTitle: byId("trialBlankTitle"),
+  trialSampleSelect: byId("trialSampleSelect"),
+  trialSampleBtn: byId("trialSampleBtn"),
+  trialResetBtn: byId("trialResetBtn"),
   authScreen: byId("authScreen"),
+  authBackHomeBtn: byId("authBackHomeBtn"),
   appShell: byId("appShell"),
   registerForm: byId("registerForm"),
   registerError: byId("registerError"),
@@ -468,6 +480,9 @@ const els = {
   userName: byId("userName"),
   userRole: byId("userRole"),
   logoutBtn: byId("logoutBtn"),
+  exitTrialBtn: byId("exitTrialBtn"),
+  trialBanner: byId("trialBanner"),
+  trialBannerExitBtn: byId("trialBannerExitBtn"),
   globalSearch: byId("globalSearch"),
   previewSwitch: byId("previewSwitch"),
   previewRoleSelect: byId("previewRoleSelect"),
@@ -770,6 +785,33 @@ function loadState() {
   return fresh;
 }
 
+function newDemoState() {
+  const demo = emptyState();
+  demo.demoMode = true;
+  demo.organization = {
+    name: "Trial Business",
+    type: "General Business",
+    currency: "PKR",
+    dateFormat: defaultDateFormat(),
+    country: "Pakistan",
+    timezone: "Asia/Karachi",
+    fiscalYearStart: "January",
+    ownerName: "Guest",
+    enabledModules: [...PERMISSION_AREAS],
+    transactionAreasAdded: true,
+    moduleLabels: {},
+    recordNouns: {},
+    createdAt: new Date().toISOString(),
+  };
+  demo.onboarding.setupCompleted = true;
+  return normalizeLoadedState(demo);
+}
+
+function loadDemoState() {
+  const saved = readStorage(DEMO_STORAGE_KEY);
+  return saved ? normalizeLoadedState({ ...saved, demoMode: true }) : newDemoState();
+}
+
 function readStorage(key) {
   try {
     const raw = localStorage.getItem(key);
@@ -1036,7 +1078,7 @@ function fillAutoIds() {
 function saveState() {
   fillAutoIds();
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    localStorage.setItem(state.demoMode ? DEMO_STORAGE_KEY : STORAGE_KEY, JSON.stringify(state));
   } catch (error) {
     console.error("Could not save ERP state", error);
     showToast("Could not save. Browser storage may be full.");
@@ -1119,6 +1161,9 @@ function loginStatus(employee) {
 }
 
 function currentUser() {
+  if (session?.userId === "guest" && state.demoMode) {
+    return { id: "guest", name: "Guest", email: "", roleId: "owner", isOwner: true, isGuest: true };
+  }
   if (!session?.userId || !isRegistered()) return null;
   if (session.userId === "owner") {
     return {
@@ -1201,6 +1246,7 @@ function startSession(userId) {
 }
 
 function logout() {
+  const wasGuest = session?.userId === "guest";
   session = null;
   previewRoleId = null;
   importSession = null;
@@ -1208,7 +1254,9 @@ function logout() {
   tutorialFollowUp = false;
   saveSession(null);
   closeModal();
-  showAuth();
+  state = loadState();
+  showHome();
+  if (wasGuest) showToast("Trial saved in this browser");
 }
 
 /* ---------- Fields ---------- */
@@ -1597,6 +1645,55 @@ function showToast(message) {
 
 /* ---------- Auth screens ---------- */
 
+function showHome() {
+  els.appShell.hidden = true;
+  els.authScreen.hidden = true;
+  els.trialDialogBackdrop.hidden = true;
+  els.homeScreen.hidden = false;
+  els.modalBackdrop.hidden = true;
+  els.setupWizardBackdrop.hidden = true;
+  els.tourLayer.hidden = true;
+  els.homeNav.classList.remove("is-open");
+  els.homeMenuBtn.setAttribute("aria-expanded", "false");
+  document.body.classList.remove("has-blocking-overlay", "menu-open");
+  document.title = "LedgerFlow | Business records, made clear";
+  window.scrollTo(0, 0);
+}
+
+function openAuthFromHome() {
+  state = loadState();
+  session = null;
+  saveSession(null);
+  showAuth();
+}
+
+function openTrialDialog() {
+  const savedTrial = Boolean(readStorage(DEMO_STORAGE_KEY));
+  els.trialBlankTitle.textContent = savedTrial ? "Continue your trial workspace" : "Start with an empty workspace";
+  els.trialResetBtn.hidden = !savedTrial;
+  els.trialDialogBackdrop.hidden = false;
+  els.trialBlankBtn.focus();
+}
+
+function beginTrial({ sample = false, fresh = false } = {}) {
+  const hadSavedTrial = Boolean(readStorage(DEMO_STORAGE_KEY));
+  if (fresh) localStorage.removeItem(DEMO_STORAGE_KEY);
+  state = loadDemoState();
+  session = { userId: "guest", startedAt: new Date().toISOString() };
+  saveSession(session);
+  previewRoleId = null;
+  currentView = "dashboard";
+  els.globalSearch.value = "";
+  showApp();
+  if (sample) loadSampleBusiness(els.trialSampleSelect.value, { skipConfirm: !hadSavedTrial || fresh });
+  else saveState();
+}
+
+function resetTrial() {
+  if (!window.confirm("Delete this browser's trial records and start with an empty workspace?")) return;
+  beginTrial({ fresh: true });
+}
+
 function populateBusinessTypeSelects() {
   document.querySelectorAll("[data-business-types]").forEach((select) => {
     select.innerHTML = Object.keys(businessScopes)
@@ -1606,6 +1703,8 @@ function populateBusinessTypeSelects() {
 }
 
 function showAuth() {
+  els.homeScreen.hidden = true;
+  els.trialDialogBackdrop.hidden = true;
   els.appShell.hidden = true;
   els.authScreen.hidden = false;
   els.modalBackdrop.hidden = true;
@@ -1639,8 +1738,12 @@ function showAuth() {
 }
 
 function showApp() {
+  els.homeScreen.hidden = true;
+  els.trialDialogBackdrop.hidden = true;
   els.authScreen.hidden = true;
   els.appShell.hidden = false;
+  els.exitTrialBtn.hidden = !currentUser()?.isGuest;
+  els.trialBanner.hidden = !currentUser()?.isGuest;
   setView(canOpenView(currentView) ? currentView : "dashboard");
   window.setTimeout(beginNewUserFlow, 120);
 }
@@ -3141,6 +3244,8 @@ function renderChrome() {
   const user = currentUser();
   const role = currentRole();
   const org = state.organization;
+  els.exitTrialBtn.hidden = !user?.isGuest;
+  els.trialBanner.hidden = !user?.isGuest;
 
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.hidden = !canOpenView(button.dataset.view);
@@ -3320,12 +3425,14 @@ function fillSetupForm() {
 }
 
 function renderSetup() {
-  const isOwner = Boolean(currentUser()?.isOwner);
+  const isOwner = Boolean(currentUser()?.isOwner && !state.demoMode);
   els.ownerFields.hidden = !isOwner;
   els.ownerFields.querySelectorAll("input").forEach((input) => {
     input.disabled = !isOwner;
   });
-  els.dataToolsPanel.hidden = !isOwner || Boolean(previewRoleId);
+  els.businessPhoneInput.required = !state.demoMode;
+  els.businessAddressInput.required = !state.demoMode;
+  els.dataToolsPanel.hidden = !currentUser()?.isOwner || Boolean(previewRoleId);
   renderSetupChecklist();
   renderRoleBuilder();
   renderRoleCards();
@@ -3341,7 +3448,7 @@ function launchSteps() {
     MODULES.some((module) => moduleEnabled(module) && Object.keys(state.fieldSettings[module] || {}).length);
   return [
     {
-      label: "Business registered",
+      label: state.demoMode ? "Trial workspace ready" : "Business registered",
       done: true,
       detail: `${org.name} · ${org.type} · ${org.currency}`,
     },
@@ -3359,7 +3466,7 @@ function launchSteps() {
       view: "setup",
       action: "Review roles",
     },
-    moduleEnabled("employees") && {
+    moduleEnabled("employees") && !state.demoMode && {
       label: "Employees can sign in",
       done: loginCount > 0,
       detail: state.employees.length
@@ -3798,7 +3905,7 @@ function applyBusinessScope(scopeName, { silent = false, replace = false } = {})
 async function saveSetup(event) {
   event.preventDefault();
   const org = state.organization;
-  const isOwner = Boolean(currentUser()?.isOwner);
+  const isOwner = Boolean(currentUser()?.isOwner && !state.demoMode);
   const name = els.businessNameInput.value.trim();
   const currency = els.currencyInput.value.trim().toUpperCase();
   const enabledModules = [...els.setupModuleChoices.querySelectorAll('input[name="profileEnabledModule"]:checked')]
@@ -10696,13 +10803,13 @@ function exportData() {
   showToast("Data exported (passwords excluded)");
 }
 
-function loadSampleBusiness(type) {
+function loadSampleBusiness(type, { skipConfirm = false } = {}) {
   const build = globalThis.LEDGERFLOW_SAMPLES?.[type];
   if (!build || !currentUser()?.isOwner) return;
   const confirmText = totalRecordCount()
     ? `Replace ALL current records with the ${type} sample? Module names and fields will be arranged for a ${type}. Your login and roles stay.`
     : `Load the ${type} sample? Module names and fields will be arranged for a ${type}.`;
-  if (!window.confirm(confirmText)) return;
+  if (!skipConfirm && !window.confirm(confirmText)) return;
 
   resetTransactionRecords();
   state.activity = [];
@@ -10771,6 +10878,7 @@ function loadSampleBusiness(type) {
   count += seedSampleTrades();
 
   state.organization.sampleLoaded = type;
+  if (state.demoMode) state.organization.name = `${type} Demo`;
   delete state.organization.hideGettingStarted;
   const manual = state.dataSources.find((source) => source.id === "source-manual");
   if (manual) {
@@ -10829,6 +10937,30 @@ function clearAllRecords({ confirmText } = {}) {
 }
 
 /* ---------- Events ---------- */
+
+els.homeScreen.addEventListener("click", (event) => {
+  if (event.target.closest("[data-open-trial]")) return openTrialDialog();
+  if (event.target.closest("[data-home-auth]")) return openAuthFromHome();
+  if (event.target.closest("#homeMenuBtn")) {
+    const open = els.homeNav.classList.toggle("is-open");
+    els.homeMenuBtn.setAttribute("aria-expanded", String(open));
+    return;
+  }
+  if (event.target.closest(".home-nav a")) {
+    els.homeNav.classList.remove("is-open");
+    els.homeMenuBtn.setAttribute("aria-expanded", "false");
+  }
+});
+els.trialDialogCloseBtn.addEventListener("click", () => (els.trialDialogBackdrop.hidden = true));
+els.trialDialogBackdrop.addEventListener("click", (event) => {
+  if (event.target === els.trialDialogBackdrop) els.trialDialogBackdrop.hidden = true;
+});
+els.trialBlankBtn.addEventListener("click", () => beginTrial());
+els.trialSampleBtn.addEventListener("click", () => beginTrial({ sample: true }));
+els.trialResetBtn.addEventListener("click", resetTrial);
+els.authBackHomeBtn.addEventListener("click", showHome);
+els.exitTrialBtn.addEventListener("click", logout);
+els.trialBannerExitBtn.addEventListener("click", logout);
 
 els.registerForm.addEventListener("submit", handleRegister);
 els.loginForm.addEventListener("submit", handleLogin);
@@ -11261,6 +11393,10 @@ window.addEventListener("resize", () => {
 });
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  if (!els.trialDialogBackdrop.hidden) {
+    els.trialDialogBackdrop.hidden = true;
+    return;
+  }
   if (!els.tourLayer.hidden) {
     finishTutorial("skipped");
     return;
@@ -11297,4 +11433,4 @@ populateBusinessTypeSelects();
 populateSampleSelects();
 resetFieldEditor();
 if (currentUser()) showApp();
-else showAuth();
+else showHome();

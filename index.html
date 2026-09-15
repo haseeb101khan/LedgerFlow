@@ -10,6 +10,171 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+    <!-- Product homepage -->
+    <div class="home" id="homeScreen" hidden>
+      <header class="home-header">
+        <div class="home-container home-header-inner">
+          <a class="home-logo" href="#top" aria-label="LedgerFlow home">
+            <span class="home-logo-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+            <span>LedgerFlow</span>
+          </a>
+          <button class="home-menu-button" id="homeMenuBtn" type="button" aria-label="Open navigation" aria-expanded="false">
+            <span></span><span></span><span></span>
+          </button>
+          <nav class="home-nav" id="homeNav" aria-label="Product navigation">
+            <a href="#features">Features</a>
+            <a href="#modules">Modules</a>
+            <a href="#how-it-works">How it works</a>
+            <a href="#pricing">Pricing</a>
+          </nav>
+          <div class="home-header-actions">
+            <button class="home-text-button" data-home-auth="login" type="button">Sign in</button>
+            <button class="home-button home-button-primary" data-home-auth="register" type="button">Get started <span aria-hidden="true">→</span></button>
+          </div>
+        </div>
+      </header>
+
+      <main id="top">
+        <section class="home-hero" aria-labelledby="homeHeroTitle">
+          <img class="home-hero-image" src="assets/ledgerflow-dashboard.png" alt="LedgerFlow dashboard showing finance, stock, dues and recent activity" />
+          <div class="home-container home-hero-inner">
+            <div class="home-hero-copy">
+              <span class="home-eyebrow">One workspace for the work behind your business</span>
+              <h1 id="homeHeroTitle">LedgerFlow<span> for your business.</span></h1>
+              <h2 class="home-hero-promise">Run your business. Understand your numbers.</h2>
+              <p>Bring sales, purchases, inventory, finance, people, and assets into one clear workspace. Keep the records your team needs and see what needs attention.</p>
+              <div class="home-hero-actions">
+                <button class="home-button home-button-primary" data-home-auth="register" type="button">Register your business <span aria-hidden="true">→</span></button>
+                <button class="home-button home-button-outline" data-open-trial type="button">Try free, no sign-up</button>
+              </div>
+              <div class="home-trust-line" aria-label="Trial details">
+                <span>No payment details</span>
+                <span>No registration to explore</span>
+                <span>Guided product tour</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="home-proof-band" aria-label="Built for different businesses">
+          <div class="home-container home-proof-inner">
+            <strong>One place for the daily work</strong>
+            <span>Retail stores</span>
+            <span>Pharmacies</span>
+            <span>Construction firms</span>
+            <span>Dealerships</span>
+            <span>Growing teams</span>
+          </div>
+        </section>
+
+        <section class="home-section" id="modules" aria-labelledby="modulesTitle">
+          <div class="home-container">
+            <div class="home-section-heading">
+              <div>
+                <span class="home-section-label">Connected modules</span>
+                <h2 id="modulesTitle">Powerful work areas. One clear picture.</h2>
+              </div>
+              <p>Switch between the work your business actually uses. Records flow into the same dashboard, alerts, and reports.</p>
+            </div>
+            <div class="home-module-grid">
+              <article class="home-module">
+                <span class="home-module-icon finance" aria-hidden="true">₨</span>
+                <h3>Finance</h3>
+                <p>Track income, expenses, unpaid balances, salaries, and performance.</p>
+                <a href="#features">Explore finance <span aria-hidden="true">→</span></a>
+              </article>
+              <article class="home-module">
+                <span class="home-module-icon sales" aria-hidden="true">↗</span>
+                <h3>Sales & purchases</h3>
+                <p>Record transactions, update stock, and follow payments and dues.</p>
+                <a href="#features">Explore transactions <span aria-hidden="true">→</span></a>
+              </article>
+              <article class="home-module">
+                <span class="home-module-icon people" aria-hidden="true">◎</span>
+                <h3>People & access</h3>
+                <p>Keep employee records and decide what each role can view or change.</p>
+                <a href="#features">Explore roles <span aria-hidden="true">→</span></a>
+              </article>
+              <article class="home-module">
+                <span class="home-module-icon stock" aria-hidden="true">▣</span>
+                <h3>Inventory & assets</h3>
+                <p>Know what you have, where it is, and what needs reordering or care.</p>
+                <a href="#features">Explore stock <span aria-hidden="true">→</span></a>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section class="home-section home-workflow-band" id="how-it-works" aria-labelledby="workflowTitle">
+          <div class="home-container home-workflow">
+            <div class="home-workflow-intro">
+              <span class="home-section-label">How it works</span>
+              <h2 id="workflowTitle">Get started in four steps.</h2>
+            </div>
+            <ol>
+              <li><span>1</span><strong>Create your business</strong><small>Set the basics and choose the work areas you need.</small></li>
+              <li><span>2</span><strong>Bring in records</strong><small>Import files or start adding data by hand.</small></li>
+              <li><span>3</span><strong>Invite your team</strong><small>Give each person a role and the right access.</small></li>
+              <li><span>4</span><strong>See the full picture</strong><small>Use charts, dues, alerts, and reports to stay on top of work.</small></li>
+            </ol>
+          </div>
+        </section>
+
+        <section class="home-section" id="features" aria-labelledby="featuresTitle">
+          <div class="home-container">
+            <div class="home-feature-head">
+              <div>
+                <span class="home-section-label">Flexible by design</span>
+                <h2 id="featuresTitle">Make the workspace fit your business.</h2>
+              </div>
+              <p>A utility store and a construction firm do not keep the same records. LedgerFlow starts with common fields, then lets you shape the rest.</p>
+            </div>
+            <div class="home-feature-grid">
+              <div><span class="home-feature-number">01</span><h3>Custom fields</h3><p>Add, rename, hide, or require the data that matters to your business.</p></div>
+              <div><span class="home-feature-number">02</span><h3>Role-based access</h3><p>Enroll multiple team members and choose what each can see, add, edit, or delete.</p></div>
+              <div><span class="home-feature-number">03</span><h3>Easy data import</h3><p>Bring in CSV, Excel, JSON, or tab-separated files with guided matching.</p></div>
+              <div><span class="home-feature-number">04</span><h3>Guided learning</h3><p>A first-time tour, page guides, and a Tutorial button are there when you need them.</p></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="home-business-band" aria-labelledby="businessesTitle">
+          <div class="home-container home-business-inner">
+            <div><h2 id="businessesTitle">Built for the business you run.</h2><p>Begin with a familiar template, then change its fields to match your own process.</p></div>
+            <div class="home-business-tags"><span>Utility store</span><span>Mart</span><span>Pharmacy</span><span>Construction</span><span>Clothing</span><span>Vehicles</span></div>
+          </div>
+        </section>
+
+        <section class="home-section home-pricing" id="pricing" aria-labelledby="pricingTitle">
+          <div class="home-container home-pricing-inner">
+            <div><span class="home-section-label">Simple pricing approach</span><h2 id="pricingTitle">Your team grows. Your modules stay together.</h2><p>Our planned pricing follows the number of users, with all work areas in one workspace rather than a separate bill for each module. Explore the full prototype without registering or entering payment details.</p></div>
+            <div class="home-pricing-points"><span>Multiple users and roles</span><span>Finance, sales, people, and stock in one workspace</span><span>Free product trial with no payment details</span><button class="home-button home-button-outline" data-open-trial type="button">Start free trial <span aria-hidden="true">→</span></button></div>
+          </div>
+        </section>
+
+        <section class="home-final-cta" aria-labelledby="homeCtaTitle">
+          <div class="home-container home-final-inner"><div><h2 id="homeCtaTitle">Ready to bring your business into one flow?</h2><p>Explore the workspace first, or create your business when you are ready.</p></div><div><button class="home-button home-button-light" data-open-trial type="button">Try the product free <span aria-hidden="true">→</span></button><button class="home-text-button light" data-home-auth="register" type="button">Register your business</button></div></div>
+        </section>
+      </main>
+
+      <footer class="home-footer"><div class="home-container"><a class="home-logo" href="#top"><span class="home-logo-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>LedgerFlow</span></a><p>Business records, made clear.</p><div><a href="#modules">Modules</a><a href="#how-it-works">How it works</a><a href="#pricing">Pricing</a><button class="home-text-button" data-home-auth="login" type="button">Sign in</button></div></div></footer>
+    </div>
+
+    <div class="trial-dialog-backdrop" id="trialDialogBackdrop" hidden>
+      <section class="trial-dialog" role="dialog" aria-modal="true" aria-labelledby="trialDialogTitle">
+        <button class="trial-dialog-close" id="trialDialogCloseBtn" type="button" aria-label="Close trial options">×</button>
+        <span class="home-section-label">No account needed</span>
+        <h2 id="trialDialogTitle">How would you like to explore?</h2>
+        <p>Your trial records stay in this browser, separate from any registered business.</p>
+        <div class="trial-dialog-options">
+          <button id="trialBlankBtn" type="button"><strong id="trialBlankTitle">Start with an empty workspace</strong><span>Create your own fields, records, roles, and business layout.</span></button>
+          <div><label for="trialSampleSelect">Explore a sample business</label><select id="trialSampleSelect"><option>Utility Store</option><option>Pharmacy</option><option>Construction Company</option><option>Vehicle Dealership</option></select><button class="home-button home-button-primary" id="trialSampleBtn" type="button">Open sample <span aria-hidden="true">→</span></button></div>
+        </div>
+        <button class="trial-reset-button" id="trialResetBtn" type="button" hidden>Start a fresh empty trial</button>
+        <small>No payment, email, or password required. This is a browser-only prototype.</small>
+      </section>
+    </div>
+
     <!-- Sign in / register -->
     <div class="auth-screen" id="authScreen" hidden>
       <div class="auth-card">
@@ -20,6 +185,7 @@
             <span>Business ERP</span>
           </div>
         </div>
+        <button class="auth-back-home" id="authBackHomeBtn" type="button">← Back to homepage</button>
 
         <form class="auth-form onboarding-form" id="registerForm" hidden>
           <div class="onboarding-progress" aria-label="Setup progress">
@@ -227,6 +393,7 @@
           </label>
           <span class="topbar-business" id="topbarBusiness"></span>
           <div class="topbar-actions">
+            <button class="button ghost" id="exitTrialBtn" type="button" hidden>Exit trial</button>
             <label class="role-switch" for="previewRoleSelect" id="previewSwitch" hidden>
               <span>View as</span>
               <select id="previewRoleSelect"></select>
@@ -247,6 +414,7 @@
         </header>
 
         <div class="content">
+          <div class="banner info" id="trialBanner" hidden><span>Free browser-only trial. Your records stay here, separate from a registered business. Team sign-in needs a registered business; use View as to preview roles.</span><button class="button ghost small" id="trialBannerExitBtn" type="button">Exit trial</button></div>
           <div class="banner info" id="previewBanner" hidden>
             <span id="previewBannerText">You are previewing a role.</span>
             <button class="button ghost small" id="exitPreviewBtn" type="button">Back to owner view</button>
