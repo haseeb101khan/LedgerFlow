@@ -148,6 +148,16 @@
             <span data-nav-label>Finance</span>
             <span class="nav-count" data-nav-count="finance" hidden></span>
           </button>
+          <button class="nav-item" data-view="sales" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z" /><path d="M9 8h6M9 12h6M9 16h3" /></svg>
+            <span>Sales</span>
+            <span class="nav-count" data-nav-count="sales" hidden></span>
+          </button>
+          <button class="nav-item" data-view="purchases" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h2l2.4 11h10.2L20 7H6.2" /><circle cx="9" cy="19" r="1.5" /><circle cx="17" cy="19" r="1.5" /></svg>
+            <span>Purchases</span>
+            <span class="nav-count" data-nav-count="purchases" hidden></span>
+          </button>
           <button class="nav-item" data-view="inventory" type="button">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5z" /><path d="m3 8 9 5 9-5M12 13v8" /></svg>
             <span data-nav-label>Items</span>
@@ -255,8 +265,9 @@
                 <p class="page-sub" id="businessScopeSummary"></p>
               </div>
               <div class="page-actions">
-                <button class="button ghost" data-view-link="dataSources" type="button">Import data</button>
                 <button class="button ghost" data-view-link="reports" type="button">Reports</button>
+                <button class="button ghost" data-new-trade="purchase" type="button">New purchase</button>
+                <button class="button primary" data-new-trade="sale" type="button">New sale</button>
               </div>
             </header>
 
@@ -507,18 +518,110 @@
               </div>
             </header>
             <nav class="tabs" id="inventoryTabs" data-tabs="inventory"></nav>
+            <div class="tab-panel" data-panel-view="inventory" data-panel-tabs="all low missing">
+              <div class="table-card">
+                <div class="table-toolbar">
+                  <label class="inline-select">
+                    <span id="inventoryCategoryLabel">Category</span>
+                    <select id="inventoryCategoryFilter"></select>
+                  </label>
+                  <span class="table-summary" id="inventoryTableSummary"></span>
+                </div>
+                <div class="table-wrap">
+                  <table class="data-table">
+                    <thead id="inventoryHead"></thead>
+                    <tbody id="inventoryTable"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+            <div class="tab-panel" data-panel-view="inventory" data-panel-tabs="history" hidden>
+              <p class="panel-intro">
+                Every change to stock is recorded here: opening stock, sales, purchases, cancellations, and adjustments,
+                with the stock left after each change.
+              </p>
+              <div class="table-card">
+                <div class="table-toolbar">
+                  <label class="inline-select">
+                    <span>Show</span>
+                    <select id="stockTypeFilter">
+                      <option value="all">All changes</option>
+                      <option value="sales">Sales</option>
+                      <option value="purchases">Purchases</option>
+                      <option value="adjustments">Adjustments</option>
+                      <option value="opening">Opening stock and imports</option>
+                    </select>
+                  </label>
+                  <span class="table-summary" id="stockHistorySummary"></span>
+                </div>
+                <div id="stockHistoryWrap"></div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Sales -->
+          <section class="view" id="salesView">
+            <header class="page-head">
+              <div>
+                <h1>Sales</h1>
+                <p class="page-sub">What was sold, to whom, for how much, and what is still owed</p>
+              </div>
+              <div class="page-actions">
+                <button class="button primary" data-new-trade="sale" type="button">New sale</button>
+              </div>
+            </header>
+            <nav class="tabs" id="salesTabs" data-tabs="sales"></nav>
             <div class="table-card">
               <div class="table-toolbar">
                 <label class="inline-select">
-                  <span id="inventoryCategoryLabel">Category</span>
-                  <select id="inventoryCategoryFilter"></select>
+                  <span>Period</span>
+                  <select id="salesPeriodFilter">
+                    <option value="all">All time</option>
+                    <option value="this-month">This month</option>
+                    <option value="last-month">Last month</option>
+                    <option value="this-year">This year</option>
+                  </select>
                 </label>
-                <span class="table-summary" id="inventoryTableSummary"></span>
+                <span class="table-summary" id="salesTableSummary"></span>
               </div>
               <div class="table-wrap">
                 <table class="data-table">
-                  <thead id="inventoryHead"></thead>
-                  <tbody id="inventoryTable"></tbody>
+                  <thead id="salesHead"></thead>
+                  <tbody id="salesTable"></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <!-- Purchases -->
+          <section class="view" id="purchasesView">
+            <header class="page-head">
+              <div>
+                <h1>Purchases</h1>
+                <p class="page-sub">Stock bought from suppliers, what it cost, and what you still owe</p>
+              </div>
+              <div class="page-actions">
+                <button class="button primary" data-new-trade="purchase" type="button">New purchase</button>
+              </div>
+            </header>
+            <nav class="tabs" id="purchasesTabs" data-tabs="purchases"></nav>
+            <div class="table-card">
+              <div class="table-toolbar">
+                <label class="inline-select">
+                  <span>Period</span>
+                  <select id="purchasesPeriodFilter">
+                    <option value="all">All time</option>
+                    <option value="this-month">This month</option>
+                    <option value="last-month">Last month</option>
+                    <option value="this-year">This year</option>
+                  </select>
+                </label>
+                <span class="table-summary" id="purchasesTableSummary"></span>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead id="purchasesHead"></thead>
+                  <tbody id="purchasesTable"></tbody>
                 </table>
               </div>
             </div>
@@ -706,6 +809,48 @@
               </div>
             </header>
             <div class="kpi-grid" id="reportCards"></div>
+            <section class="panel" id="tradeReportPanel">
+              <div class="panel-head">
+                <div>
+                  <h2>Sales, purchases & stock</h2>
+                  <p>Built from recorded sales, purchases, and stock changes. Cancelled records are left out.</p>
+                </div>
+                <div class="control-bar">
+                  <label class="inline-select">
+                    <span>Period</span>
+                    <select id="reportPeriodSelect">
+                      <option value="this-month">This month</option>
+                      <option value="last-month">Last month</option>
+                      <option value="this-year">This year</option>
+                      <option value="all">All time</option>
+                    </select>
+                  </label>
+                  <label class="inline-select" id="reportCurrencyControl" hidden>
+                    <span>Currency</span>
+                    <select id="reportCurrencySelect"></select>
+                  </label>
+                </div>
+              </div>
+              <div class="kpi-grid" id="tradeReportKpis"></div>
+              <div class="split-grid two report-tables">
+                <div>
+                  <h3 class="detail-heading">Best-selling items</h3>
+                  <div class="table-wrap bordered" id="topItemsReport"></div>
+                </div>
+                <div>
+                  <h3 class="detail-heading">Top customers</h3>
+                  <div class="table-wrap bordered" id="topCustomersReport"></div>
+                </div>
+                <div>
+                  <h3 class="detail-heading">Purchases by supplier</h3>
+                  <div class="table-wrap bordered" id="suppliersReport"></div>
+                </div>
+                <div>
+                  <h3 class="detail-heading">Stock changes</h3>
+                  <div class="table-wrap bordered" id="movementReport"></div>
+                </div>
+              </div>
+            </section>
             <section class="panel">
               <div class="panel-head">
                 <div>

@@ -39,6 +39,39 @@ The project now has two tracks:
 Everything collected in the setup guide can be changed later under **Setup & Roles → Business**.
 Each employee sees their own tutorial the first time they sign in.
 
+## Sales, Purchases And Stock
+
+After records exist, stock and money only change through recorded transactions:
+
+- **Sales**: items, quantity, price (the list price is suggested but can be changed), discount, customer (saved contact, new
+  customer, or walk-in), and payment (paid, part paid, or on credit with a due date). Stock goes down, income is
+  added in Finance, and any unpaid balance appears under Dues.
+- **Purchases**: supplier, items, quantity, cost, supplier bill number, and payment. Stock goes up, the item's cost
+  becomes the weighted average cost, the expense is added, and unpaid bills appear under Dues.
+- **Payments**: full or part payments against a sale, purchase, or unpaid finance entry, each with date and method.
+- **Cancelling**: sales and purchases are never edited or deleted. Cancelling requires a reason, reverses the stock,
+  and removes the income or expense from totals while keeping the record.
+- **Stock adjustments**: counting corrections, damage, expiry, loss, and internal use, each with a reason.
+- **Stock history**: every change with the stock left after it, the reference, who made it, and why.
+- **Reports**: best-selling items, top customers, purchases by supplier, gross profit, and stock movement totals.
+
+An item's quantity can only be typed when the item is first created (opening stock).
+
+## Invoices, Receipts And Vouchers
+
+Every transaction has a document button that opens a print preview with the registered business name,
+address, phone, email, and tax/registration number at the top:
+
+- **Sale** → Sales invoice (items, quantity, prices, discount, totals, amount in words, payments, balance due)
+- **Purchase** → Purchase invoice for goods received, with the supplier bill number
+- **Payment** → Payment receipt (`RCPT-0001` / `PAY-0001`) showing paid to date and the balance remaining
+- **Other income or expense** → Receipt voucher (`RV-0001`) or payment voucher (`PV-0001`)
+- **Stock adjustment** → Stock adjustment note (`ADJ-0001`) with stock before, change, and reason
+
+Choose **A4 invoice** or **Shop receipt (80 mm)** for thermal printers. Documents carry a PAID / PARTIALLY PAID /
+UNPAID / CANCELLED stamp, signature lines, and are marked *Original* on first print and *Copy* after that.
+Document numbers are assigned once and never reused.
+
 ## How To Run
 
 Open `index.html` in a browser. No server or package install is required.

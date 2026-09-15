@@ -4,6 +4,21 @@ const SESSION_KEY = "ledgerflow-session-v1";
 const SHEETJS_URL = "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";
 
 const MODULES = ["inventory", "finance", "contacts", "employees", "assets"];
+// Sales and purchases are recorded transactions, not editable field-based records.
+// They move stock, create finance entries, and create dues in one step.
+const TRANSACTION_AREAS = ["sales", "purchases"];
+const PERMISSION_AREAS = [...MODULES, ...TRANSACTION_AREAS];
+const PAYMENT_METHODS = ["Cash", "Bank transfer", "Card", "Mobile wallet", "Cheque", "Other"];
+const ADJUSTMENT_REASONS = [
+  "Stock count correction",
+  "Damaged",
+  "Expired",
+  "Lost or stolen",
+  "Used internally",
+  "Returned by customer",
+  "Found stock",
+  "Other",
+];
 
 const MODULE_GUIDANCE = {
   inventory: "Stock levels, product details, costs, and low-stock alerts.",
@@ -11,6 +26,8 @@ const MODULE_GUIDANCE = {
   contacts: "Customers, suppliers, balances, and contact details.",
   employees: "Employee records, salaries, logins, and access roles.",
   assets: "Equipment, vehicles, assignments, value, and maintenance.",
+  sales: "Record every sale: items, quantity, price, customer, and payment.",
+  purchases: "Record stock bought from suppliers, what it cost, and what you owe.",
 };
 
 const SETUP_STEPS = ["Business", "Documents", "Work areas", "Starting plan", "Ready"];
@@ -45,6 +62,8 @@ const navTitles = {
   contacts: "Customers & Vendors",
   employees: "Employees",
   assets: "Assets",
+  sales: "Sales",
+  purchases: "Purchases",
 };
 
 const SAMPLE_BUSINESSES = ["Pharmacy", "Utility Store", "Construction Company", "Vehicle Dealership"];
@@ -71,6 +90,8 @@ const titles = {
   contacts: "Customers & Vendors",
   dataSources: "Import Data",
   reports: "Reports",
+  sales: "Sales",
+  purchases: "Purchases",
 };
 
 const moduleActions = [
@@ -545,6 +566,10 @@ function emptyState() {
     employees: [],
     finance: [],
     contacts: [],
+    sales: [],
+    purchases: [],
+    stockMovements: [],
+    counters: { sale: 0, purchase: 0 },
     dataSources: defaultDataSources(),
     activity: [],
   };
@@ -613,7 +638,7 @@ function defaultDataSources() {
 function blankPermissions() {
   return {
     modules: Object.fromEntries(
-      MODULES.map((module) => [module, { view: false, add: false, edit: false, delete: false }]),
+      PERMISSION_AREAS.map((module) => [module, { view: false, add: false, edit: false, delete: false }]),
     ),
     ...Object.fromEntries(generalPermissions.map((permission) => [permission.key, false])),
   };
@@ -622,7 +647,7 @@ function blankPermissions() {
 function fullPermissions() {
   return {
     modules: Object.fromEntries(
-      MODULES.map((module) => [module, { view: true, add: true, edit: true, delete: true }]),
+      PERMISSION_AREAS.map((module) => [module, { view: true, add: true, edit: true, delete: true }]),
     ),
     ...Object.fromEntries(generalPermissions.map((permission) => [permission.key, true])),
   };
@@ -656,7 +681,7 @@ function defaultRoles() {
       description: "Runs daily operations, sees numbers and reports, cannot change setup or logins.",
       system: false,
       permissions: buildPermissions(
-        { inventory: "vaed", finance: "vae", contacts: "vaed", employees: "v", assets: "vae" },
+        { inventory: "vaed", finance: "vae", contacts: "vaed", employees: "v", assets: "vae", sales: "vaed", purchases: "vae" },
         { sensitiveNumbers: true, reports: true, imports: true },
       ),
     },
@@ -665,7 +690,7 @@ function defaultRoles() {
       name: "Staff",
       description: "Daily work: stock updates, recording sales, and customer dues.",
       system: false,
-      permissions: buildPermissions({ inventory: "vae", finance: "va", contacts: "vae" }),
+      permissions: buildPermissions({ inventory: "vae", finance: "va", contacts: "vae", sales: "va" }),
     },
   ];
 }
@@ -673,7 +698,27 @@ function defaultRoles() {
 function normalizePermissions(raw = {}) {
   const permissions = blankPermissions();
   const legacy = !raw.modules;
-  MODULES.forEach((module) => {
+  PERMISSION_AREAS.forEach((module) => {
+    if (!legacy && TRANSACTION_AREAS.includes(module) && !raw.modules[module]) {
+      // Roles saved before sales and purchases existed: derive sensible access.
+      const inventory = raw.modules.inventory || {};
+      const finance = raw.modules.finance || {};
+      permissions.modules[module] =
+        module === "sales"
+          ? {
+              view: Boolean(inventory.view || finance.view),
+              add: Boolean(finance.add || inventory.edit),
+              edit: Boolean(finance.edit),
+              delete: Boolean(finance.delete),
+            }
+          : {
+              view: Boolean(inventory.view && finance.view),
+              add: Boolean(inventory.add && finance.add),
+              edit: Boolean(inventory.edit && finance.edit),
+              delete: Boolean(inventory.delete && finance.delete),
+            };
+      return;
+    }
     if (legacy) {
       const canView = Boolean(raw[module]);
       permissions.modules[module] = {
@@ -743,10 +788,18 @@ function normalizeLoadedState(loaded) {
   if (next.organization) {
     const type = LEGACY_BUSINESS_TYPES[next.organization.type] || next.organization.type;
     next.organization.type = businessScopes[type] ? type : "General Business";
-    const enabled = Array.isArray(next.organization.enabledModules)
-      ? next.organization.enabledModules.filter((module) => MODULES.includes(module))
-      : [...MODULES];
-    next.organization.enabledModules = enabled.length ? enabled : [...MODULES];
+    let enabled = Array.isArray(next.organization.enabledModules)
+      ? next.organization.enabledModules.filter((module) => PERMISSION_AREAS.includes(module))
+      : [...PERMISSION_AREAS];
+    if (!next.organization.transactionAreasAdded) {
+      // Businesses set up before sales and purchases existed get them switched on
+      // wherever stock or finance is used.
+      if (enabled.includes("inventory") || enabled.includes("finance")) {
+        enabled = [...new Set([...enabled, ...TRANSACTION_AREAS])];
+      }
+      next.organization.transactionAreasAdded = true;
+    }
+    next.organization.enabledModules = enabled.length ? enabled : [...PERMISSION_AREAS];
   }
 
   const onboarding = loaded.onboarding || {};
@@ -822,6 +875,40 @@ function normalizeLoadedState(loaded) {
       : source,
   );
   next.activity = Array.isArray(loaded.activity) ? loaded.activity : [];
+  next.sales = Array.isArray(loaded.sales) ? loaded.sales : [];
+  next.purchases = Array.isArray(loaded.purchases) ? loaded.purchases : [];
+  next.stockMovements = Array.isArray(loaded.stockMovements)
+    ? loaded.stockMovements
+    : // Data saved before stock history existed: start each item's history from its current quantity.
+      next.inventory
+        .filter((item) => Number(item.quantity) > 0)
+        .map((item) => ({
+          id: `move-opening-${item.id}`,
+          date: String(item.createdAt || item.importedAt || new Date().toISOString()).slice(0, 10),
+          createdAt: new Date().toISOString(),
+          itemId: item.id,
+          itemName: item.name,
+          sku: item.sku || "",
+          type: "Opening stock",
+          change: Number(item.quantity),
+          balanceAfter: Number(item.quantity),
+          reference: "",
+          referenceId: "",
+          referenceKind: "",
+          party: "",
+          unitAmount: item.unitCost ?? "",
+          currency: item.currency,
+          reason: "Stock on hand when stock history started",
+          by: "",
+        }));
+  next.counters = {
+    sale: Math.max(Number(loaded.counters?.sale) || 0, next.sales.length),
+    purchase: Math.max(Number(loaded.counters?.purchase) || 0, next.purchases.length),
+    // Document numbers for vouchers, payment receipts, and adjustment notes are never reused.
+    voucher: Number(loaded.counters?.voucher) || 0,
+    receipt: Number(loaded.counters?.receipt) || 0,
+    adjustment: Number(loaded.counters?.adjustment) || 0,
+  };
   return next;
 }
 
@@ -974,7 +1061,7 @@ function canOpenView(view) {
   if (view === "setup") return canAccess("settings");
   if (view === "dataSources") return canAccess("imports") && MODULES.some((module) => can(module, "add"));
   if (view === "reports") return canAccess("reports");
-  if (MODULES.includes(view)) return can(view, "view");
+  if (PERMISSION_AREAS.includes(view)) return can(view, "view");
   return false;
 }
 
@@ -1474,7 +1561,8 @@ async function handleRegister(event) {
     timezone: existing?.timezone || (currency === "PKR" ? "Asia/Karachi" : Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"),
     fiscalYearStart: existing?.fiscalYearStart || "January",
     businessEmail: existing?.businessEmail || ownerEmail,
-    enabledModules: existing?.enabledModules || [...MODULES],
+    enabledModules: existing?.enabledModules || [...PERMISSION_AREAS],
+    transactionAreasAdded: true,
     ownerName,
     ownerEmail,
     ownerPasswordSalt: salt,
@@ -1562,8 +1650,8 @@ function timezoneOptions(selected) {
 }
 
 function moduleChoicesHtml(selectedModules, inputName = "enabledModule") {
-  const selected = new Set(selectedModules?.length ? selectedModules : MODULES);
-  return MODULES.map(
+  const selected = new Set(selectedModules?.length ? selectedModules : PERMISSION_AREAS);
+  return PERMISSION_AREAS.map(
     (module) => `
       <label class="module-choice">
         <input type="checkbox" name="${inputName}" value="${module}" ${selected.has(module) ? "checked" : ""} />
@@ -1603,7 +1691,7 @@ function openSetupWizard() {
 
 function renderSetupWizard() {
   const org = state.organization;
-  const selectedModules = org.enabledModules?.length ? org.enabledModules : MODULES;
+  const selectedModules = org.enabledModules?.length ? org.enabledModules : PERMISSION_AREAS;
   els.setupWizardError.hidden = true;
   els.setupWizardProgress.innerHTML = SETUP_STEPS.map(
     (label, index) => `
@@ -1800,7 +1888,7 @@ function captureSetupWizardStep() {
       registrationNumber: String(form.get("registrationNumber") || "").trim(),
     });
   } else if (setupWizardStep === 2) {
-    const enabledModules = form.getAll("enabledModule").filter((module) => MODULES.includes(module));
+    const enabledModules = form.getAll("enabledModule").filter((module) => PERMISSION_AREAS.includes(module));
     if (!enabledModules.length) {
       showSetupWizardError("Choose at least one work area to continue.");
       return false;
@@ -1887,6 +1975,24 @@ function buildTutorialSteps() {
       icon: firstModule === "finance" ? "wallet" : firstModule === "employees" ? "users" : "box",
       title: `Open ${navTitle(firstModule)} here`,
       text: "Each work area has its own overview, filters, alerts, and records. Red counts point to overdue, low-stock, or incomplete information that needs attention.",
+    });
+  }
+  if (canOpenView("sales")) {
+    steps.push({
+      selector: '.nav-item[data-view="sales"]',
+      view: "dashboard",
+      icon: "income",
+      title: "Record every sale here",
+      text: "A sale records what was sold, to whom, the price, and how it was paid. Stock goes down, income is added, and anything unpaid is tracked as a due automatically.",
+    });
+  }
+  if (canOpenView("purchases")) {
+    steps.push({
+      selector: '.nav-item[data-view="purchases"]',
+      view: "dashboard",
+      icon: "expense",
+      title: "Record stock that comes in",
+      text: "A purchase records which supplier the stock came from and what it cost. Stock goes up, the expense is added, and unpaid supplier bills appear under Dues.",
     });
   }
   if (firstAddable) {
@@ -2095,7 +2201,7 @@ function addActivity(message, module) {
 
 function canSeeActivity(entry) {
   const module = entry.module || Object.keys(titles).find((key) => viewTitle(key) === entry.detail);
-  if (MODULES.includes(module)) return can(module, "view");
+  if (PERMISSION_AREAS.includes(module)) return can(module, "view");
   if (module === "imports" || module === "dataSources") return canAccess("imports");
   return canAccess("settings");
 }
@@ -2111,18 +2217,27 @@ function render() {
   }
   renderChrome();
   populateFilters();
-  ["finance", "inventory", "contacts", "employees", "assets", "setup"].forEach((view) => {
+  ["finance", "sales", "purchases", "inventory", "contacts", "employees", "assets", "setup"].forEach((view) => {
     if (canOpenView(view)) renderTabs(view);
   });
   if (canAccess("settings")) renderSetup();
   renderDashboard();
   if (can("finance", "view")) renderFinance();
-  ["inventory", "contacts", "assets"].forEach((module) => {
+  if (can("sales", "view")) renderTrades("sale");
+  if (can("purchases", "view")) renderTrades("purchase");
+  if (can("inventory", "view")) {
+    if (activeTab("inventory") === "history") renderStockHistory();
+    else renderModule("inventory");
+  }
+  ["contacts", "assets"].forEach((module) => {
     if (can(module, "view")) renderModule(module);
   });
   if (can("employees", "view")) renderEmployeesView();
   if (canOpenView("dataSources")) renderDataSources();
-  if (canAccess("reports")) renderReports();
+  if (canAccess("reports")) {
+    renderReports();
+    renderTradeReports();
+  }
 }
 
 function renderChrome() {
@@ -2180,6 +2295,17 @@ function renderChrome() {
   const dues = can("finance", "view") ? buildDues() : { receivables: [], payables: [] };
   setCount("finance", [...dues.receivables, ...dues.payables].filter((item) => item.overdue && item.kind !== "salary").length);
   setCount("inventory", can("inventory", "view") ? state.inventory.filter(isLowStock).length : 0);
+  TRADE_NAV_COUNTS.forEach(([kind, area]) => {
+    setCount(
+      area,
+      can(area, "view")
+        ? state[area].filter((trade) => tradeBalance(trade) > 0 && trade.dueDate && trade.dueDate < todayIso()).length
+        : 0,
+    );
+  });
+  document.querySelectorAll("[data-new-trade]").forEach((button) => {
+    button.hidden = !can(TRADE[button.dataset.newTrade].area, "add");
+  });
   setCount(
     "employees",
     can("employees", "view") && canAccess("sensitiveNumbers")
@@ -2221,7 +2347,7 @@ function renderChrome() {
   els.exportBtn.hidden = !canAccess("export") || totalRecordCount() === 0;
   const target = quickAddTarget();
   // Section pages have their own add button in the page header.
-  els.quickAddBtn.hidden = !target || MODULES.includes(currentView);
+  els.quickAddBtn.hidden = !target || PERMISSION_AREAS.includes(currentView);
   if (target) {
     const label = `Add ${recordNoun(target)}`;
     els.quickAddLabel.textContent = label;
@@ -2241,14 +2367,14 @@ function populateFilters() {
     "#financeCategoryFilter",
     "All",
     uniqueValues(
-      state.finance.filter((entry) => !typeForTab || entry.type === typeForTab),
+      liveFinance().filter((entry) => !typeForTab || entry.type === typeForTab),
       "category",
     ),
   );
 
   const monthSelect = byId("financeMonthFilter");
   const wanted = financeViewState.monthFilter || monthSelect.value || "all";
-  const months = [...new Set(state.finance.map((entry) => monthKeyOf(entry.date)).filter((key) => /^\d{4}-\d{2}$/.test(key)))]
+  const months = [...new Set(liveFinance().map((entry) => monthKeyOf(entry.date)).filter((key) => /^\d{4}-\d{2}$/.test(key)))]
     .sort()
     .reverse();
   const years = [...new Set(months.map((key) => key.slice(0, 4)))];
@@ -2293,7 +2419,7 @@ function fillSetupForm() {
   els.ownerNameInput.value = org.ownerName || "";
   els.ownerEmailInput.value = org.ownerEmail || "";
   els.ownerPasswordInput.value = "";
-  els.setupModuleChoices.innerHTML = moduleChoicesHtml(org.enabledModules || MODULES, "profileEnabledModule");
+  els.setupModuleChoices.innerHTML = moduleChoicesHtml(org.enabledModules || PERMISSION_AREAS,"profileEnabledModule");
 }
 
 function renderSetup() {
@@ -2386,7 +2512,7 @@ function renderRoleCards() {
     .map((role) => {
       const locked = role.id === "owner";
       const assigned = state.employees.filter((employee) => employee.accessRole === role.id).length;
-      const matrix = MODULES.map(
+      const matrix = PERMISSION_AREAS.map(
         (module) => `
           <tr>
             <td>${escapeHtml(viewTitle(module))}</td>
@@ -2780,7 +2906,7 @@ async function saveSetup(event) {
   const currency = els.currencyInput.value.trim().toUpperCase();
   const enabledModules = [...els.setupModuleChoices.querySelectorAll('input[name="profileEnabledModule"]:checked')]
     .map((input) => input.value)
-    .filter((module) => MODULES.includes(module));
+    .filter((module) => PERMISSION_AREAS.includes(module));
   if (!name) {
     showToast("Business name is required");
     return;
@@ -2908,7 +3034,7 @@ function round2(value) {
 }
 
 function financeTotalsWhere(currency, predicate) {
-  return state.finance.reduce(
+  return liveFinance().reduce(
     (totals, entry) => {
       if (recordCurrency(entry) !== currency || !predicate(entry)) return totals;
       const amount = parseMoney(entry.amount);
@@ -2934,11 +3060,11 @@ function isUnpaid(entry) {
 
 function totals() {
   const income = sumByCurrency(
-    state.finance.filter((entry) => entry.type === "Income"),
+    liveFinance().filter((entry) => entry.type === "Income"),
     (entry) => parseMoney(entry.amount),
   );
   const expense = sumByCurrency(
-    state.finance.filter((entry) => entry.type === "Expense"),
+    liveFinance().filter((entry) => entry.type === "Expense"),
     (entry) => parseMoney(entry.amount),
   );
   const inventoryValue = sumByCurrency(state.inventory, (item) => parseMoney(item.quantity) * parseMoney(item.unitCost));
@@ -2963,7 +3089,7 @@ function totals() {
 function alertSummary() {
   const lowStock = can("inventory", "view") ? state.inventory.filter(isLowStock).length : 0;
   const maintenance = can("assets", "view") ? state.assets.filter(needsMaintenance).length : 0;
-  const unpaid = can("finance", "view") ? state.finance.filter((entry) => financeStatus(entry) === "Overdue").length : 0;
+  const unpaid = can("finance", "view") ? liveFinance().filter((entry) => financeStatus(entry) === "Overdue").length : 0;
   const missingInfo = MODULES.filter((module) => can(module, "view")).reduce(
     (count, module) => count + state[module].filter((record) => needsInfo(module, record)).length,
     0,
@@ -3007,14 +3133,16 @@ function buildDues() {
   const receivables = [];
   const payables = [];
   if (can("finance", "view")) {
-    state.finance.filter(isUnpaid).forEach((entry) => {
+    liveFinance().filter(isUnpaid).forEach((entry) => {
       const item = {
         kind: "transaction",
         id: entry.id,
         party: entry.party || "",
         title: entry.description || entry.category || "Transaction",
-        detail: entry.category || "",
-        amount: parseMoney(entry.amount),
+        detail: [entry.category, parseMoney(entry.amountPaid) ? `${formatCurrency(entry.amountPaid, recordCurrency(entry))} already paid` : ""]
+          .filter(Boolean)
+          .join(" · "),
+        amount: outstandingOf(entry),
         currency: recordCurrency(entry),
         dueDate: entry.dueDate || "",
         date: entry.date || "",
@@ -3091,8 +3219,8 @@ function dueItemHtml(item, direction) {
         ? `<span>Recorded ${escapeHtml(formatDate(item.date))}</span>`
         : "";
   let action = "";
-  if (item.kind === "transaction" && can("finance", "edit")) {
-    action = `<button type="button" class="accent" data-mark-paid="${escapeHtml(item.id)}">${direction === "in" ? "Mark received" : "Mark paid"}</button>`;
+  if (item.kind === "transaction" && canTakePayment(state.finance.find((entry) => entry.id === item.id))) {
+    action = `<button type="button" class="accent" data-mark-paid="${escapeHtml(item.id)}">${direction === "in" ? "Receive payment" : "Pay"}</button>`;
   } else if (item.kind === "balance" && can("finance", "add")) {
     action = `<button type="button" class="accent" data-record-payment="${escapeHtml(item.id)}">Record payment</button>`;
   } else if (item.kind === "salary" && can("finance", "add")) {
@@ -3160,7 +3288,7 @@ function renderDashboard() {
   const previous = shiftMonth(month, -1);
 
   if (can("finance", "view")) {
-    const { currency } = chartCurrency(state.finance);
+    const { currency } = chartCurrency(liveFinance());
     const now = financeTotalsWhere(currency, (entry) => monthKeyOf(entry.date) === month);
     const before = financeTotalsWhere(currency, (entry) => monthKeyOf(entry.date) === previous);
     if (sensitive) {
@@ -3609,7 +3737,7 @@ function drawFinanceChart(canvas, rows) {
 }
 
 function renderCashFlowChart() {
-  const { currency, excluded } = chartCurrency(state.finance);
+  const { currency, excluded } = chartCurrency(liveFinance());
   const month = todayIso().slice(0, 7);
   const rows = Array.from({ length: 12 }, (_, index) => {
     const key = shiftMonth(month, index - 11);
@@ -3717,11 +3845,11 @@ function buildInsights() {
   const insights = [];
   const month = todayIso().slice(0, 7);
   const monthIncome = sumByCurrency(
-    state.finance.filter((entry) => entry.type === "Income" && monthKeyOf(entry.date) === month),
+    liveFinance().filter((entry) => entry.type === "Income" && monthKeyOf(entry.date) === month),
     (entry) => parseMoney(entry.amount),
   );
 
-  if (can("finance", "view") && state.finance.length) {
+  if (can("finance", "view") && liveFinance().length) {
     const netEntries = currencyEntries(summary.net);
     const losing = netEntries.filter(([, amount]) => amount < 0);
     const multiCurrency = netEntries.length > 1;
@@ -3745,7 +3873,7 @@ function buildInsights() {
           },
     );
     const overdueIncome = sumByCurrency(
-      state.finance.filter((entry) => entry.type === "Income" && financeStatus(entry) === "Overdue"),
+      liveFinance().filter((entry) => entry.type === "Income" && financeStatus(entry) === "Overdue"),
       (entry) => parseMoney(entry.amount),
     );
     if (currencyEntries(overdueIncome).length) {
@@ -3808,6 +3936,11 @@ function renderActivity() {
 
 /* ---------- Tabs ---------- */
 
+const TRADE_NAV_COUNTS = [
+  ["sale", "sales"],
+  ["purchase", "purchases"],
+];
+
 const TAB_STORAGE_KEY = "ledgerflow-tabs-v1";
 const tabState = (() => {
   try {
@@ -3827,8 +3960,8 @@ function tabDefinitions(view) {
     const overdue = [...dues.receivables, ...dues.payables].filter((item) => item.overdue).length;
     return [
       { key: "overview", label: "Overview", show: canAccess("sensitiveNumbers") },
-      { key: "income", label: "Income", count: state.finance.filter((entry) => entry.type === "Income").length },
-      { key: "expenses", label: "Expenses", count: state.finance.filter((entry) => entry.type === "Expense").length },
+      { key: "income", label: "Income", count: liveFinance().filter((entry) => entry.type === "Income").length },
+      { key: "expenses", label: "Expenses", count: liveFinance().filter((entry) => entry.type === "Expense").length },
       { key: "dues", label: "Dues", count: overdue, alert: true, hideZero: true },
       { key: "all", label: "All transactions", count: state.finance.length },
     ];
@@ -3838,7 +3971,18 @@ function tabDefinitions(view) {
     return [
       { key: "all", label: `All ${viewTitle("inventory").toLowerCase()}`, count: state.inventory.length },
       { key: "low", label: "Low stock", show: tracksReorderLevel(), count: low, alert: true, hideZero: true },
+      { key: "history", label: "Stock history", count: state.stockMovements.length },
       { key: "missing", label: "Needs info", show: missingCount("inventory") > 0, count: missingCount("inventory"), alert: true },
+    ];
+  }
+  if (view === "sales" || view === "purchases") {
+    const list = state[view];
+    const live = list.filter((trade) => trade.status !== "Cancelled");
+    const cancelled = list.length - live.length;
+    return [
+      { key: "all", label: view === "sales" ? "All sales" : "All purchases", count: live.length },
+      { key: "unpaid", label: "Unpaid", count: live.filter((trade) => tradeBalance(trade) > 0).length, alert: true, hideZero: true },
+      { key: "cancelled", label: "Cancelled", show: cancelled > 0, count: cancelled },
     ];
   }
   if (view === "contacts") {
@@ -3928,7 +4072,7 @@ function openTab(view, key) {
 const financeViewState = { period: "monthly", year: null, currency: null, monthFilter: "all" };
 
 function financeCurrencies() {
-  return [...new Set(state.finance.map(recordCurrency))];
+  return [...new Set(liveFinance().map(recordCurrency))];
 }
 
 function renderFinance() {
@@ -3940,13 +4084,13 @@ function renderFinance() {
 
 function renderFinanceOverview() {
   const currencies = financeCurrencies();
-  if (!currencies.includes(financeViewState.currency)) financeViewState.currency = chartCurrency(state.finance).currency;
+  if (!currencies.includes(financeViewState.currency)) financeViewState.currency = chartCurrency(liveFinance()).currency;
   const currency = financeViewState.currency;
   const currentYear = Number(todayIso().slice(0, 4));
   const years = [
     ...new Set([
       currentYear,
-      ...state.finance
+      ...liveFinance()
         .filter((entry) => recordCurrency(entry) === currency)
         .map((entry) => Number(String(entry.date).slice(0, 4)))
         .filter(Boolean),
@@ -3969,7 +4113,7 @@ function renderFinanceOverview() {
   byId("financeCurrencySelect").innerHTML = currencies
     .map((code) => `<option value="${code}" ${code === currency ? "selected" : ""}>${code}</option>`)
     .join("");
-  const otherCount = state.finance.filter((entry) => recordCurrency(entry) !== currency).length;
+  const otherCount = liveFinance().filter((entry) => recordCurrency(entry) !== currency).length;
   byId("financeOverviewNote").textContent = otherCount
     ? `Showing ${currency} only. ${otherCount} transaction${otherCount === 1 ? " is" : "s are"} in other currencies and never added in.`
     : `All amounts in ${currency}.`;
@@ -4086,7 +4230,7 @@ function renderFinanceOverview() {
 
 function renderCategoryBars(targetId, type, currency, inScope) {
   const byCategory = {};
-  state.finance.forEach((entry) => {
+  liveFinance().forEach((entry) => {
     if (entry.type !== type || recordCurrency(entry) !== currency || !inScope(entry)) return;
     const category = entry.category || "Uncategorized";
     byCategory[category] = (byCategory[category] || 0) + parseMoney(entry.amount);
@@ -4169,15 +4313,7 @@ function renderDuesTab() {
 }
 
 function markPaid(id) {
-  const entry = state.finance.find((record) => record.id === id);
-  if (!entry || !can("finance", "edit")) return;
-  entry.status = "Paid";
-  entry.paidOn = todayIso();
-  const verb = entry.type === "Income" ? "Received" : "Paid";
-  addActivity(`${verb}: ${entry.description || entry.category} (${formatCurrency(entry.amount, recordCurrency(entry))})`, "finance");
-  saveState();
-  render();
-  showToast(`Marked as ${verb.toLowerCase()}`);
+  openPaymentModal(id);
 }
 
 function recordPayment(contactId) {
@@ -4414,10 +4550,10 @@ function contactDues(contact) {
   if (balance) byCurrency[recordCurrency(contact)] = balance;
   const name = String(contact.name || "").trim().toLowerCase();
   if (name) {
-    state.finance.forEach((entry) => {
+    liveFinance().forEach((entry) => {
       if (!isUnpaid(entry) || String(entry.party || "").trim().toLowerCase() !== name) return;
       const code = recordCurrency(entry);
-      const signed = entry.type === "Income" ? parseMoney(entry.amount) : -parseMoney(entry.amount);
+      const signed = entry.type === "Income" ? outstandingOf(entry) : -outstandingOf(entry);
       byCurrency[code] = (byCurrency[code] || 0) + signed;
     });
   }
@@ -4472,7 +4608,13 @@ const tableColumns = {
     { field: "date", render: (entry) => escapeHtml(formatDate(entry.date)) },
     {
       field: "description",
-      render: (entry) => titleCell(entry.description, [entry.category, entry.party].filter((part) => !isBlank(part)).join(" · ")),
+      render: (entry) =>
+        titleCell(
+          entry.description,
+          [entry.category, entry.party, entry.sourceType ? `From ${entry.sourceType} ${entry.reference || ""}`.trim() : ""]
+            .filter((part) => !isBlank(part))
+            .join(" · "),
+        ),
     },
     {
       field: "type",
@@ -4501,7 +4643,12 @@ function statusCell(module, record) {
   const parts = [];
   if (module === "inventory") parts.push(stockBadge(record));
   if (module === "assets") parts.push(statusBadge(record.condition));
-  if (module === "finance") parts.push(statusBadge(financeStatus(record)));
+  if (module === "finance") {
+    if (record.cancelled) parts.push(badge("Cancelled", "red"));
+    else if (isUnpaid(record) && parseMoney(record.amountPaid)) {
+      parts.push(badge(financeStatus(record) === "Overdue" ? "Part paid · overdue" : "Part paid", financeStatus(record) === "Overdue" ? "red" : "amber"));
+    } else parts.push(statusBadge(financeStatus(record)));
+  }
   if (module === "employees" || module === "contacts") parts.push(statusBadge(record.status));
   if (needsInfo(module, record)) parts.push(badge("Needs info", "red"));
   return `<div class="badge-row">${parts.join("")}</div>`;
@@ -4573,6 +4720,7 @@ function filteredRecords(module) {
     const period = byId("financeMonthFilter").value;
     rows = rows
       .filter((entry) => {
+        if (tab !== "all" && entry.cancelled) return false;
         if (tab === "income" && entry.type !== "Income") return false;
         if (tab === "expenses" && entry.type !== "Expense") return false;
         if (category !== "all" && entry.category !== category) return false;
@@ -4591,11 +4739,11 @@ function tableSummary(module, rows) {
   const sensitive = canAccess("sensitiveNumbers");
   if (module === "finance") {
     const income = sumByCurrency(
-      rows.filter((entry) => entry.type === "Income"),
+      rows.filter((entry) => entry.type === "Income" && !entry.cancelled),
       (entry) => parseMoney(entry.amount),
     );
     const expense = sumByCurrency(
-      rows.filter((entry) => entry.type === "Expense"),
+      rows.filter((entry) => entry.type === "Expense" && !entry.cancelled),
       (entry) => parseMoney(entry.amount),
     );
     const tab = activeTab("finance");
@@ -4667,13 +4815,39 @@ function renderModule(module) {
 
 function rowActions(module, record) {
   const actions = [];
-  if (module === "finance" && isUnpaid(record) && can("finance", "edit")) {
+  if (module === "finance" && !record.cancelled && isUnpaid(record) && canTakePayment(record)) {
     actions.push(
-      `<button type="button" class="accent" data-mark-paid="${escapeHtml(record.id)}">${record.type === "Income" ? "Mark received" : "Mark paid"}</button>`,
+      `<button type="button" class="accent" data-mark-paid="${escapeHtml(record.id)}">${record.type === "Income" ? "Receive payment" : "Pay"}</button>`,
     );
+  }
+  if (module === "finance" && record.sourceType) {
+    // Entries created by a sale or purchase are changed only through that sale or purchase.
+    const area = record.sourceType === "sale" ? "sales" : "purchases";
+    if (can(area, "view")) {
+      actions.push(
+        `<button type="button" data-view-trade="${record.sourceType}:${escapeHtml(record.sourceId)}">Open ${escapeHtml(record.reference || record.sourceType)}</button>`,
+        `<button type="button" data-document="finance:${escapeHtml(record.id)}">Invoice</button>`,
+      );
+    }
+    return `<div class="row-actions">${actions.join("")}</div>`;
+  }
+  if (module === "finance") {
+    actions.push(`<button type="button" data-document="finance:${escapeHtml(record.id)}">${record.type === "Income" ? "Receipt" : "Voucher"}</button>`);
+  }
+  if (module === "inventory") {
+    if (can("sales", "add") && parseMoney(record.quantity) > 0) {
+      actions.push(`<button type="button" class="accent" data-sell-item="${escapeHtml(record.id)}">Sell</button>`);
+    }
+    if (can("inventory", "edit")) {
+      actions.push(`<button type="button" data-adjust-stock="${escapeHtml(record.id)}">Adjust stock</button>`);
+    }
+    actions.push(`<button type="button" data-stock-history="${escapeHtml(record.id)}">History</button>`);
   }
   if (module === "contacts" && parseMoney(record.balance) && can("finance", "add")) {
     actions.push(`<button type="button" class="accent" data-record-payment="${escapeHtml(record.id)}">Record payment</button>`);
+  }
+  if (module === "contacts" && (can("sales", "view") || can("purchases", "view"))) {
+    actions.push(`<button type="button" data-contact-history="${escapeHtml(record.id)}">History</button>`);
   }
   if (can(module, "edit")) {
     actions.push(
@@ -4714,6 +4888,7 @@ function openModal(module, id = null, { prefill = null, context = null } = {}) {
   const record = id ? state[module].find((entry) => entry.id === id) : null;
   if (id && !record) return;
   editing = { module, id, context };
+  setModalWide(false);
   const source = record || prefill || {};
   const missing = record ? visibleMissingFields(module, record) : [];
   const missingNames = new Set(missing.map((field) => field.name));
@@ -4741,6 +4916,16 @@ function openModal(module, id = null, { prefill = null, context = null } = {}) {
         ? `<div class="form-notice">
             <strong>This payment reduces ${escapeHtml(settling.name)}'s opening balance</strong>
             <span>Open balance: ${escapeHtml(formatCurrency(Math.abs(parseMoney(settling.balance)), recordCurrency(settling)))}. Enter a smaller amount for a part payment.</span>
+          </div>`
+        : ""
+    }
+    ${
+      module === "finance" && !record && !settling && (can("sales", "add") || can("purchases", "add"))
+        ? `<div class="form-notice">
+            <strong>Selling or buying stock?</strong>
+            <span>Use ${can("sales", "add") ? `<button class="link-button" type="button" data-new-trade="sale">New sale</button>` : ""}${
+              can("sales", "add") && can("purchases", "add") ? " or " : ""
+            }${can("purchases", "add") ? `<button class="link-button" type="button" data-new-trade="purchase">New purchase</button>` : ""} instead, so stock, the customer or supplier, and dues are updated together. Use this form for other income and expenses such as rent or bills.</span>
           </div>`
         : ""
     }
@@ -4822,6 +5007,15 @@ function fieldTemplate(field, record, isNew, isMissing) {
     </div>
   `;
 
+  if (field.name === "quantity" && !isNew && editing?.module === "inventory") {
+    return `
+      <div class="field">
+        <label for="${id}">${escapeHtml(field.label)}</label>
+        <input id="${id}" type="text" value="${escapeHtml(formatNumber(value))}" disabled />
+        <small>Stock changes only through a sale, a purchase, or Adjust stock, so every change is recorded.</small>
+      </div>
+    `;
+  }
   if (field.type === "textarea") return wrap(`<textarea ${common}>${escapeHtml(value)}</textarea>`);
   if (field.type === "password") {
     const placeholder = record.passwordHash ? "Leave blank to keep current password" : "Set a password so they can sign in";
@@ -4851,7 +5045,9 @@ function fieldTemplate(field, record, isNew, isMissing) {
 }
 
 function closeModal() {
+  activeDocument = null;
   els.modalBackdrop.hidden = true;
+  setModalWide(false);
   editing = null;
 }
 
@@ -4891,6 +5087,10 @@ async function applyEmployeeLogin(record, formData) {
 async function handleSubmit(event) {
   event.preventDefault();
   if (!editing) return;
+  if (editing.kind) {
+    submitTransactionForm();
+    return;
+  }
   const { module, id } = editing;
   if (!can(module, id ? "edit" : "add")) {
     showFormError("Your role no longer allows this change.");
@@ -4903,9 +5103,18 @@ async function handleSubmit(event) {
 
   formFields(module).forEach((field) => {
     if (field.virtual) return;
+    // Stock on hand only changes through sales, purchases, and stock adjustments.
+    if (module === "inventory" && existing && field.name === "quantity") return;
     const raw = String(formData.get(field.name) ?? "").trim();
     record[field.name] = field.type === "number" ? (raw === "" ? "" : parseMoney(raw)) : raw;
   });
+
+  if (module === "inventory" && existing && record.currency !== recordCurrency(existing) && itemHasTrades(existing.id)) {
+    showFormError(
+      `This item already has sales or purchases in ${recordCurrency(existing)}. Its currency can't change, or its history would mix currencies.`,
+    );
+    return;
+  }
 
   if (module === "employees") {
     const error = await applyEmployeeLogin(record, formData);
@@ -4964,6 +5173,7 @@ async function handleSubmit(event) {
     record.sourceName = "Manual Entry";
     record.createdAt = new Date().toISOString();
     state[module].unshift(record);
+    if (module === "inventory") logOpeningStock(record, "Opening stock");
     touchManualSource();
     addActivity(`${recordNoun(module)} added: ${recordLabel(module, record)}`, module);
     showToast(`${recordNoun(module)} added`);
@@ -4990,6 +5200,14 @@ function deleteRecord(module, id) {
   if (!record) return;
   if (module === "employees" && currentUser()?.id === id) {
     showToast("You cannot delete your own employee record while signed in");
+    return;
+  }
+  if (module === "inventory" && itemHasTrades(id)) {
+    showToast("This item appears in sales or purchases, so it can't be deleted. Use Adjust stock to bring it to zero.");
+    return;
+  }
+  if (module === "finance" && record.sourceType) {
+    showToast(`This entry belongs to ${record.reference || `a ${record.sourceType}`}. Cancel the ${record.sourceType} instead.`);
     return;
   }
   if (!window.confirm(`Delete "${recordLabel(module, record)}"? This cannot be undone.`)) return;
@@ -5819,7 +6037,15 @@ function completeImport(mode) {
         return;
       }
       Object.entries(incoming).forEach(([key, value]) => {
-        if (key !== "currency" && !isBlank(value)) duplicate[key] = value;
+        if (key === "currency" || isBlank(value)) return;
+        if (module === "inventory" && key === "quantity") {
+          const change = round3(parseMoney(value) - parseMoney(duplicate.quantity));
+          if (change) {
+            recordStockMovement(duplicate, change, { type: "Import update", reason: `Quantity from ${s.fileName}` });
+          }
+          return;
+        }
+        duplicate[key] = value;
       });
       duplicate.importedAt = now;
       touched.push(duplicate);
@@ -5832,6 +6058,7 @@ function completeImport(mode) {
     }
     const record = { ...incoming, id: makeId(module), importedAt: now };
     state[module].unshift(record);
+    if (module === "inventory") logOpeningStock(record, "Opening stock (import)", s.fileName);
     touched.push(record);
     added += 1;
   });
@@ -5890,6 +6117,2420 @@ function downloadSampleCsv() {
   link.click();
   URL.revokeObjectURL(url);
   showToast("Sample CSV downloaded");
+}
+
+/* ---------- Sales, purchases, and stock movements ----------
+ *
+ * Every change to stock or money after records exist goes through a recorded
+ * transaction:
+ * - A sale lowers stock, creates an income entry, and leaves any unpaid part as a due.
+ * - A purchase raises stock, updates the item's average cost, creates an expense
+ *   entry, and leaves any unpaid part as a due.
+ * - A stock adjustment changes stock with a reason (count correction, damage, ...).
+ * Each stock change is logged in state.stockMovements with the balance after it.
+ * Sales and purchases are never edited or deleted; they are cancelled, which
+ * reverses their stock and removes their finance entry from totals.
+ */
+
+const TRADE = {
+  sale: {
+    area: "sales",
+    list: "sales",
+    noun: "Sale",
+    party: "Customer",
+    partyType: "Customer",
+    priceField: "sellPrice",
+    priceLabel: "Price",
+    financeType: "Income",
+    category: "Sales",
+    movement: "Sale",
+    reversal: "Sale cancelled",
+    sign: -1,
+  },
+  purchase: {
+    area: "purchases",
+    list: "purchases",
+    noun: "Purchase",
+    party: "Supplier",
+    partyType: "Supplier",
+    priceField: "unitCost",
+    priceLabel: "Cost",
+    financeType: "Expense",
+    category: "Stock purchases",
+    movement: "Purchase",
+    reversal: "Purchase cancelled",
+    sign: 1,
+  },
+};
+
+const tradeFilters = { sales: "all", purchases: "all", stockType: "all", reportPeriod: "this-month", reportCurrency: "" };
+
+function liveFinance() {
+  return state.finance.filter((entry) => !entry.cancelled);
+}
+
+function round3(value) {
+  return Math.round(value * 1000) / 1000;
+}
+
+function outstandingOf(entry) {
+  if (!entry || entry.cancelled || !isUnpaid(entry)) return 0;
+  return round2(Math.max(0, parseMoney(entry.amount) - parseMoney(entry.amountPaid)));
+}
+
+function canTakePayment(entry) {
+  if (!entry || entry.cancelled) return false;
+  if (entry.sourceType === "sale") return can("sales", "edit") || can("finance", "edit");
+  if (entry.sourceType === "purchase") return can("purchases", "edit") || can("finance", "edit");
+  return can("finance", "edit");
+}
+
+function itemHasTrades(itemId) {
+  return [...state.sales, ...state.purchases].some((trade) => trade.lines.some((line) => line.itemId === itemId));
+}
+
+function findTrade(kind, id) {
+  return state[TRADE[kind].list].find((trade) => trade.id === id);
+}
+
+function tradeBalance(trade) {
+  if (trade.status === "Cancelled") return 0;
+  return round2(Math.max(0, parseMoney(trade.total) - parseMoney(trade.amountPaid)));
+}
+
+function tradeStatus(trade) {
+  if (trade.status === "Cancelled") return { label: "Cancelled", tone: "red" };
+  if (tradeBalance(trade) <= 0) return { label: "Paid", tone: "green" };
+  const overdue = Boolean(trade.dueDate && trade.dueDate < todayIso());
+  if (parseMoney(trade.amountPaid) > 0) return { label: overdue ? "Part paid · overdue" : "Part paid", tone: overdue ? "red" : "amber" };
+  return { label: overdue ? "Unpaid · overdue" : "Unpaid", tone: overdue ? "red" : "amber" };
+}
+
+function nextTradeNumber(kind) {
+  state.counters[kind] = (Number(state.counters[kind]) || 0) + 1;
+  return `${kind === "sale" ? "S" : "P"}-${String(state.counters[kind]).padStart(4, "0")}`;
+}
+
+function recordStockMovement(item, change, { type, reference = "", referenceId = "", referenceKind = "", party = "", unitAmount = "", reason = "", date = todayIso(), extra = {} } = {}) {
+  const balanceAfter = round3(parseMoney(item.quantity) + change);
+  item.quantity = balanceAfter;
+  state.stockMovements.unshift({
+    id: makeId("move"),
+    date,
+    createdAt: new Date().toISOString(),
+    itemId: item.id,
+    itemName: item.name,
+    sku: item.sku || "",
+    type,
+    change: round3(change),
+    balanceAfter,
+    reference,
+    referenceId,
+    referenceKind,
+    party,
+    unitAmount,
+    currency: recordCurrency(item),
+    reason,
+    by: currentUser()?.name || "",
+    ...extra,
+  });
+}
+
+function logOpeningStock(item, type, reason = "", date = "") {
+  const quantity = parseMoney(item.quantity);
+  if (!quantity) return;
+  state.stockMovements.unshift({
+    id: makeId("move"),
+    date: date || String(item.createdAt || item.importedAt || new Date().toISOString()).slice(0, 10),
+    createdAt: new Date().toISOString(),
+    itemId: item.id,
+    itemName: item.name,
+    sku: item.sku || "",
+    type,
+    change: quantity,
+    balanceAfter: quantity,
+    reference: "",
+    referenceId: "",
+    referenceKind: "",
+    party: "",
+    unitAmount: item.unitCost ?? "",
+    currency: recordCurrency(item),
+    reason,
+    by: currentUser()?.name || "",
+  });
+}
+
+function movementBadge(type) {
+  const tones = {
+    Sale: "blue",
+    Purchase: "green",
+    Adjustment: "amber",
+    "Sale cancelled": "red",
+    "Purchase cancelled": "red",
+    "Import update": "violet",
+  };
+  return badge(type, tones[type] || "violet");
+}
+
+/* ----- New sale / new purchase form ----- */
+
+function tradeItemPrice(kind, item) {
+  const value = item?.[TRADE[kind].priceField];
+  return isBlank(value) ? "" : parseMoney(value);
+}
+
+function newTradeLine(kind, itemId = "") {
+  const item = itemId ? state.inventory.find((entry) => entry.id === itemId) : null;
+  return { key: makeId("line"), itemId, custom: false, description: "", quantity: 1, unitPrice: tradeItemPrice(kind, item), priceTouched: false };
+}
+
+function openTradeForm(kind, { itemId = "" } = {}) {
+  const config = TRADE[kind];
+  if (!can(config.area, "add")) {
+    showToast(`Your role cannot record ${config.area}`);
+    return;
+  }
+  const item = itemId ? state.inventory.find((entry) => entry.id === itemId) : null;
+  const defaultDue = new Date();
+  defaultDue.setDate(defaultDue.getDate() + 14);
+  editing = {
+    kind,
+    draft: {
+      date: todayIso(),
+      contactId: "",
+      partyName: "",
+      partyPhone: "",
+      saveContact: true,
+      currency: item ? recordCurrency(item) : orgCurrency(),
+      lines: [newTradeLine(kind, itemId)],
+      discount: "",
+      payment: "paid",
+      amountPaid: "",
+      method: "Cash",
+      dueDate: isoFromParts(defaultDue.getFullYear(), defaultDue.getMonth() + 1, defaultDue.getDate()),
+      reference: "",
+      notes: "",
+    },
+  };
+  els.modalKicker.textContent = viewTitle(config.area);
+  els.modalTitle.textContent = kind === "sale" ? "New sale" : "New purchase";
+  setModalWide(true);
+  renderTradeForm();
+  els.modalBackdrop.hidden = false;
+}
+
+function setModalWide(wide) {
+  els.recordForm.closest(".modal")?.classList.toggle("wide", wide);
+}
+
+function tradeTotals(draft) {
+  const lines = draft.lines.map((line) => ({
+    ...line,
+    total: round2(parseMoney(line.quantity) * parseMoney(line.unitPrice)),
+  }));
+  const subtotal = round2(lines.reduce((sum, line) => sum + line.total, 0));
+  const discount = round2(Math.min(Math.max(parseMoney(draft.discount), 0), subtotal));
+  const total = round2(subtotal - discount);
+  const paid = draft.payment === "paid" ? total : draft.payment === "unpaid" ? 0 : round2(Math.max(0, parseMoney(draft.amountPaid)));
+  return { lines, subtotal, discount, total, paid, balance: round2(total - paid) };
+}
+
+function tradeContactOptions(kind, selected) {
+  const config = TRADE[kind];
+  const primary = state.contacts.filter((contact) => contact.type === config.partyType);
+  const others = state.contacts.filter((contact) => contact.type !== config.partyType);
+  const option = (contact) =>
+    `<option value="${escapeHtml(contact.id)}" ${contact.id === selected ? "selected" : ""}>${escapeHtml(contact.name)}${
+      contact.phone ? ` · ${escapeHtml(contact.phone)}` : ""
+    }</option>`;
+  return `
+    ${
+      kind === "sale"
+        ? `<option value="" ${selected === "" ? "selected" : ""}>Walk-in customer (not saved)</option>`
+        : `<option value="" ${selected === "" ? "selected" : ""}>Choose a supplier…</option>`
+    }
+    <option value="__new__" ${selected === "__new__" ? "selected" : ""}>+ New ${config.party.toLowerCase()}</option>
+    ${primary.length ? `<optgroup label="${config.partyType}s">${primary.map(option).join("")}</optgroup>` : ""}
+    ${others.length ? `<optgroup label="Other contacts">${others.map(option).join("")}</optgroup>` : ""}
+  `;
+}
+
+function tradeLineHint(kind, line) {
+  if (line.custom) return kind === "sale" ? "Not taken from stock" : "Not added to stock";
+  const item = state.inventory.find((entry) => entry.id === line.itemId);
+  if (!item) return "";
+  const currency = recordCurrency(item);
+  const stock = parseMoney(item.quantity);
+  const parts = [];
+  if (kind === "sale") {
+    const list = tradeItemPrice(kind, item);
+    if (list !== "") parts.push(`List price ${formatCurrency(list, currency)}`);
+    parts.push(`${formatNumber(stock)} in stock`);
+    if (list !== "" && !isBlank(line.unitPrice) && parseMoney(line.unitPrice) !== list) {
+      const diff = parseMoney(line.unitPrice) - list;
+      parts.push(`${diff < 0 ? "below" : "above"} list by ${formatCurrency(Math.abs(diff), currency)}`);
+    }
+  } else {
+    if (!isBlank(item.unitCost)) parts.push(`Current cost ${formatCurrency(item.unitCost, currency)}`);
+    parts.push(`${formatNumber(stock)} in stock`);
+  }
+  return parts.join(" · ");
+}
+
+function tradeLineWarning(kind, line, draft) {
+  if (kind !== "sale" || line.custom || !line.itemId) return "";
+  const item = state.inventory.find((entry) => entry.id === line.itemId);
+  if (!item) return "";
+  const wanted = draft.lines
+    .filter((entry) => entry.itemId === line.itemId && !entry.custom)
+    .reduce((sum, entry) => sum + parseMoney(entry.quantity), 0);
+  return wanted > parseMoney(item.quantity) ? `Only ${formatNumber(item.quantity)} in stock` : "";
+}
+
+function renderTradeForm() {
+  const { kind, draft } = editing;
+  const config = TRADE[kind];
+  const totals = tradeTotals(draft);
+  const money = (value) => formatCurrency(value, draft.currency);
+  const items = state.inventory
+    .filter((item) => recordCurrency(item) === draft.currency)
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const hiddenItems = state.inventory.length - items.length;
+  const showPartyInputs = draft.contactId === "__new__" || (kind === "sale" && draft.contactId === "");
+
+  const lineRows = totals.lines
+    .map((line, index) => {
+      const warning = tradeLineWarning(kind, line, draft);
+      return `
+      <div class="trade-line ${warning ? "has-warning" : ""}" data-line="${line.key}">
+        <div class="trade-item">
+          <label class="sr-only" for="line-item-${line.key}">Item ${index + 1}</label>
+          <select id="line-item-${line.key}" name="line-item-${line.key}" data-trade-refresh>
+            <option value="">Choose ${escapeHtml(recordNoun("inventory").toLowerCase())}…</option>
+            ${items
+              .map(
+                (item) =>
+                  `<option value="${escapeHtml(item.id)}" ${item.id === line.itemId && !line.custom ? "selected" : ""}>${escapeHtml(item.name)}${
+                    item.sku ? ` (${escapeHtml(item.sku)})` : ""
+                  } · ${formatNumber(item.quantity)} in stock</option>`,
+              )
+              .join("")}
+            <option value="__custom__" ${line.custom ? "selected" : ""}>Other item or service (not in stock)</option>
+          </select>
+          ${
+            line.custom
+              ? `<input name="line-desc-${line.key}" type="text" value="${escapeHtml(line.description)}" placeholder="Describe the item or service" />`
+              : ""
+          }
+          <small data-line-hint="${line.key}">${escapeHtml(tradeLineHint(kind, line))}</small>
+          <small class="line-warning" data-line-warning="${line.key}" ${warning ? "" : "hidden"}>${escapeHtml(warning)}</small>
+        </div>
+        <label class="trade-cell">
+          <span>Qty</span>
+          <input name="line-qty-${line.key}" type="number" min="0" step="any" value="${escapeHtml(line.quantity)}" />
+        </label>
+        <label class="trade-cell">
+          <span>${config.priceLabel} each</span>
+          <input name="line-price-${line.key}" type="number" min="0" step="0.01" value="${escapeHtml(line.unitPrice)}" />
+        </label>
+        <div class="trade-cell trade-line-total">
+          <span>Total</span>
+          <strong data-line-total="${line.key}">${escapeHtml(money(line.total))}</strong>
+        </div>
+        <button type="button" class="icon-button" data-trade-remove-line="${line.key}" aria-label="Remove line" ${
+          draft.lines.length === 1 ? "disabled" : ""
+        }>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+        </button>
+      </div>
+    `;
+    })
+    .join("");
+
+  const paymentChoice = (value, label) => `
+    <label class="choice-pill">
+      <input type="radio" name="payment" value="${value}" data-trade-refresh ${draft.payment === value ? "checked" : ""} />
+      <span>${label}</span>
+    </label>
+  `;
+
+  els.recordForm.innerHTML = `
+    <div class="form-error" id="formError" hidden></div>
+    <fieldset class="form-section">
+      <legend>${config.party}</legend>
+      <div class="form-grid">
+        <div class="field full">
+          <label for="tradeContact">${kind === "sale" ? "Sold to" : "Bought from"}</label>
+          <select id="tradeContact" name="contactId" data-trade-refresh>${tradeContactOptions(kind, draft.contactId)}</select>
+          ${
+            kind === "sale" && draft.contactId === ""
+              ? `<small>For a walk-in you can leave the name blank; the sale is recorded as "Walk-in customer". A name is needed if they will pay later.</small>`
+              : ""
+          }
+        </div>
+        ${
+          showPartyInputs
+            ? `
+          <div class="field">
+            <label for="tradePartyName">${config.party} name${draft.contactId === "__new__" ? " *" : ""}</label>
+            <input id="tradePartyName" name="partyName" type="text" value="${escapeHtml(draft.partyName)}" placeholder="${
+              draft.contactId === "__new__" ? "Person or company name" : "Optional"
+            }" />
+          </div>
+          <div class="field">
+            <label for="tradePartyPhone">Phone</label>
+            <input id="tradePartyPhone" name="partyPhone" type="text" value="${escapeHtml(draft.partyPhone)}" placeholder="Optional" />
+          </div>
+          ${
+            draft.contactId === "__new__" && can("contacts", "add")
+              ? `<label class="check-control full"><input type="checkbox" name="saveContact" ${draft.saveContact ? "checked" : ""} /><span>Save to ${escapeHtml(
+                  viewTitle("contacts"),
+                )} for next time</span></label>`
+              : ""
+          }
+        `
+            : ""
+        }
+      </div>
+    </fieldset>
+
+    <fieldset class="form-section">
+      <legend>${kind === "sale" ? "What was sold" : "What was bought"}</legend>
+      ${
+        hiddenItems
+          ? `<p class="muted-note trade-note">${hiddenItems} ${escapeHtml(viewTitle("inventory").toLowerCase())} priced in other currencies are hidden. Change the currency below to use them.</p>`
+          : ""
+      }
+      <div class="trade-lines">${lineRows}</div>
+      <button type="button" class="button ghost small" data-trade-add-line>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+        Add another line
+      </button>
+      <div class="trade-totals">
+        <div><span>Subtotal</span><strong id="tradeSubtotal">${escapeHtml(money(totals.subtotal))}</strong></div>
+        <label><span>Discount</span><input name="discount" type="number" min="0" step="0.01" value="${escapeHtml(draft.discount)}" placeholder="0" /></label>
+        <div class="grand"><span>Total</span><strong id="tradeTotal">${escapeHtml(money(totals.total))}</strong></div>
+      </div>
+    </fieldset>
+
+    <fieldset class="form-section">
+      <legend>Payment</legend>
+      <div class="form-grid">
+        <div class="field">
+          <label for="tradeDate">Date</label>
+          <input id="tradeDate" name="date" type="date" value="${escapeHtml(draft.date)}" max="${todayIso()}" />
+        </div>
+        <div class="field">
+          <label for="tradeCurrency">Currency</label>
+          <select id="tradeCurrency" name="currency" data-trade-refresh>
+            ${currencyOptions()
+              .map((code) => `<option value="${code}" ${code === draft.currency ? "selected" : ""}>${code}</option>`)
+              .join("")}
+          </select>
+        </div>
+        <div class="field full">
+          <span class="field-label">${kind === "sale" ? "Has the customer paid?" : "Have you paid the supplier?"}</span>
+          <div class="choice-pills">
+            ${paymentChoice("paid", "Paid in full")}
+            ${paymentChoice("partial", "Part paid")}
+            ${paymentChoice("unpaid", kind === "sale" ? "Not paid yet (on credit)" : "Not paid yet")}
+          </div>
+        </div>
+        ${
+          draft.payment === "partial"
+            ? `<div class="field"><label for="tradeAmountPaid">Amount paid now *</label><input id="tradeAmountPaid" name="amountPaid" type="number" min="0" step="0.01" value="${escapeHtml(
+                draft.amountPaid,
+              )}" /></div>`
+            : ""
+        }
+        ${
+          draft.payment !== "unpaid"
+            ? `<div class="field"><label for="tradeMethod">Paid by</label><select id="tradeMethod" name="method">${PAYMENT_METHODS.map(
+                (method) => `<option ${method === draft.method ? "selected" : ""}>${method}</option>`,
+              ).join("")}</select></div>`
+            : ""
+        }
+        ${
+          draft.payment !== "paid"
+            ? `<div class="field"><label for="tradeDueDate">Balance due by</label><input id="tradeDueDate" name="dueDate" type="date" value="${escapeHtml(
+                draft.dueDate,
+              )}" /></div>`
+            : ""
+        }
+        <div class="field full"><div class="trade-balance" id="tradeBalanceNote">${tradeBalanceNote(kind, totals, draft)}</div></div>
+      </div>
+    </fieldset>
+
+    <fieldset class="form-section">
+      <legend>Details</legend>
+      <div class="form-grid">
+        <div class="field">
+          <label for="tradeReference">${kind === "purchase" ? "Supplier bill / invoice no." : "Reference (optional)"}</label>
+          <input id="tradeReference" name="reference" type="text" value="${escapeHtml(draft.reference)}" />
+        </div>
+        <div class="field full">
+          <label for="tradeNotes">Notes</label>
+          <textarea id="tradeNotes" name="notes">${escapeHtml(draft.notes)}</textarea>
+        </div>
+      </div>
+    </fieldset>
+
+    <div class="form-actions">
+      <button class="button ghost" id="cancelFormBtn" type="button">Cancel</button>
+      <button class="button primary" type="submit" id="tradeSubmitBtn">Save ${config.noun.toLowerCase()} · ${escapeHtml(money(totals.total))}</button>
+    </div>
+  `;
+}
+
+function tradeBalanceNote(kind, totals, draft) {
+  const money = (value) => formatCurrency(value, draft.currency);
+  if (totals.total <= 0) return `<span class="muted-note">Add items to see the total.</span>`;
+  if (totals.balance <= 0) {
+    return kind === "sale"
+      ? `<span class="money-in">Fully paid: ${escapeHtml(money(totals.total))} received.</span>`
+      : `<span>Fully paid: ${escapeHtml(money(totals.total))} paid to the supplier.</span>`;
+  }
+  return kind === "sale"
+    ? `<span class="negative-text">${escapeHtml(money(totals.balance))} will be added to Dues as owed to you.</span>`
+    : `<span class="negative-text">${escapeHtml(money(totals.balance))} will be added to Dues as money you owe.</span>`;
+}
+
+function captureTradeForm() {
+  if (!editing || !TRADE[editing.kind]) return;
+  const { kind, draft } = editing;
+  const form = els.recordForm;
+  const value = (name) => form.elements[name]?.value ?? undefined;
+  const assign = (key, name = key) => {
+    const next = value(name);
+    if (next !== undefined) draft[key] = next;
+  };
+  assign("contactId");
+  assign("partyName");
+  assign("partyPhone");
+  if (form.elements.saveContact) draft.saveContact = form.elements.saveContact.checked;
+  assign("date");
+  const previousCurrency = draft.currency;
+  assign("currency");
+  assign("discount");
+  const payment = form.querySelector('input[name="payment"]:checked');
+  if (payment) draft.payment = payment.value;
+  assign("amountPaid");
+  assign("method");
+  assign("dueDate");
+  assign("reference");
+  assign("notes");
+
+  draft.lines.forEach((line) => {
+    // Read the typed price before handling an item change, so choosing an item
+    // can fill in its price unless the user already typed one.
+    const price = value(`line-price-${line.key}`);
+    if (price !== undefined && String(price) !== String(line.unitPrice)) {
+      line.unitPrice = price;
+      line.priceTouched = true;
+    }
+    const selected = value(`line-item-${line.key}`);
+    if (selected !== undefined) {
+      const custom = selected === "__custom__";
+      const itemId = custom ? "" : selected;
+      if (custom !== line.custom || itemId !== line.itemId) {
+        line.custom = custom;
+        line.itemId = itemId;
+        if (!line.priceTouched || isBlank(line.unitPrice)) {
+          const item = state.inventory.find((entry) => entry.id === itemId);
+          line.unitPrice = custom ? "" : tradeItemPrice(kind, item);
+          line.priceTouched = false;
+        }
+      }
+    }
+    const description = value(`line-desc-${line.key}`);
+    if (description !== undefined) line.description = description;
+    const quantity = value(`line-qty-${line.key}`);
+    if (quantity !== undefined) line.quantity = quantity;
+  });
+
+  if (draft.currency !== previousCurrency) {
+    // Items priced in another currency can't be used in this transaction.
+    draft.lines.forEach((line) => {
+      const item = state.inventory.find((entry) => entry.id === line.itemId);
+      if (item && recordCurrency(item) !== draft.currency) {
+        line.itemId = "";
+        line.unitPrice = "";
+        line.priceTouched = false;
+      }
+    });
+  }
+}
+
+function updateTradeSummary() {
+  const { kind, draft } = editing;
+  const totals = tradeTotals(draft);
+  const money = (value) => formatCurrency(value, draft.currency);
+  totals.lines.forEach((line) => {
+    const total = els.recordForm.querySelector(`[data-line-total="${line.key}"]`);
+    if (total) total.textContent = money(line.total);
+    const hint = els.recordForm.querySelector(`[data-line-hint="${line.key}"]`);
+    if (hint) hint.textContent = tradeLineHint(kind, line);
+    const warning = tradeLineWarning(kind, line, draft);
+    const warningNode = els.recordForm.querySelector(`[data-line-warning="${line.key}"]`);
+    if (warningNode) {
+      warningNode.textContent = warning;
+      warningNode.hidden = !warning;
+      warningNode.closest(".trade-line")?.classList.toggle("has-warning", Boolean(warning));
+    }
+  });
+  byId("tradeSubtotal").textContent = money(totals.subtotal);
+  byId("tradeTotal").textContent = money(totals.total);
+  byId("tradeBalanceNote").innerHTML = tradeBalanceNote(kind, totals, draft);
+  byId("tradeSubmitBtn").textContent = `Save ${TRADE[kind].noun.toLowerCase()} · ${money(totals.total)}`;
+}
+
+// Checks a draft and returns either { error } or everything needed to save it.
+function prepareTrade(kind, draft) {
+  const config = TRADE[kind];
+  const currency = draft.currency;
+  if (!isValidCurrency(currency)) return { error: "Choose a valid currency." };
+  if (!draft.date) return { error: "Enter the date." };
+  if (draft.date > todayIso()) return { error: "The date can't be in the future." };
+
+  const lines = [];
+  const quantityByItem = {};
+  for (const [index, line] of draft.lines.entries()) {
+    const empty = !line.itemId && !line.custom && isBlank(line.description);
+    if (empty && (isBlank(line.quantity) || parseMoney(line.quantity) === 1) && isBlank(line.unitPrice)) continue;
+    const label = `Line ${index + 1}`;
+    const quantity = parseMoney(line.quantity);
+    if (!line.itemId && !line.custom) return { error: `${label}: choose what was ${kind === "sale" ? "sold" : "bought"}.` };
+    if (quantity <= 0) return { error: `${label}: enter a quantity above zero.` };
+    if (isBlank(line.unitPrice)) return { error: `${label}: enter the ${config.priceLabel.toLowerCase()}.` };
+    const unitPrice = parseMoney(line.unitPrice);
+    if (unitPrice < 0) return { error: `${label}: the ${config.priceLabel.toLowerCase()} can't be negative.` };
+    if (line.custom) {
+      if (isBlank(line.description)) return { error: `${label}: describe the item or service.` };
+      lines.push({ itemId: "", custom: true, name: line.description.trim(), sku: "", quantity, unitPrice, listPrice: "", unitCost: "", lineTotal: round2(quantity * unitPrice) });
+      continue;
+    }
+    const item = state.inventory.find((entry) => entry.id === line.itemId);
+    if (!item) return { error: `${label}: that item no longer exists.` };
+    if (recordCurrency(item) !== currency) {
+      return { error: `${label}: ${item.name} is priced in ${recordCurrency(item)}, but this ${config.noun.toLowerCase()} is in ${currency}.` };
+    }
+    quantityByItem[item.id] = (quantityByItem[item.id] || 0) + quantity;
+    lines.push({
+      itemId: item.id,
+      custom: false,
+      name: item.name,
+      sku: item.sku || "",
+      quantity,
+      unitPrice,
+      listPrice: tradeItemPrice(kind, item),
+      unitCost: kind === "sale" ? (isBlank(item.unitCost) ? "" : parseMoney(item.unitCost)) : unitPrice,
+      lineTotal: round2(quantity * unitPrice),
+    });
+  }
+  if (!lines.length) return { error: `Add at least one item to the ${config.noun.toLowerCase()}.` };
+  if (kind === "sale") {
+    for (const [itemId, wanted] of Object.entries(quantityByItem)) {
+      const item = state.inventory.find((entry) => entry.id === itemId);
+      if (wanted > parseMoney(item.quantity) + 0.0005) {
+        return {
+          error: `Only ${formatNumber(item.quantity)} of ${item.name} in stock, but this sale has ${formatNumber(wanted)}. Record a purchase or adjust stock first.`,
+        };
+      }
+    }
+  }
+
+  const subtotal = round2(lines.reduce((sum, line) => sum + line.lineTotal, 0));
+  const discount = round2(parseMoney(draft.discount));
+  if (discount < 0) return { error: "The discount can't be negative." };
+  if (discount > subtotal) return { error: "The discount can't be more than the subtotal." };
+  const total = round2(subtotal - discount);
+  let paid = total;
+  if (draft.payment === "unpaid") paid = 0;
+  if (draft.payment === "partial") {
+    paid = round2(parseMoney(draft.amountPaid));
+    if (!(paid > 0 && paid < total)) {
+      return { error: `For a part payment, enter an amount between 0 and ${formatCurrency(total, currency)}.` };
+    }
+  }
+  const balance = round2(total - paid);
+  if (balance > 0 && total <= 0) return { error: "An unpaid transaction needs a total above zero." };
+
+  let contact = draft.contactId && draft.contactId !== "__new__" ? state.contacts.find((entry) => entry.id === draft.contactId) : null;
+  if (draft.contactId && draft.contactId !== "__new__" && !contact) return { error: "That contact no longer exists." };
+  let partyName = contact ? contact.name : String(draft.partyName || "").trim();
+  const partyPhone = contact ? contact.phone || "" : String(draft.partyPhone || "").trim();
+  if (kind === "purchase" && !partyName) return { error: "Choose or enter the supplier this stock came from." };
+  if (draft.contactId === "__new__" && !partyName) return { error: `Enter the ${config.party.toLowerCase()}'s name.` };
+  if (balance > 0 && !partyName) {
+    return { error: "Enter the customer's name so you know who owes this money, or mark the sale as paid in full." };
+  }
+  if (!contact && partyName) {
+    contact = state.contacts.find((entry) => entry.name.trim().toLowerCase() === partyName.toLowerCase()) || null;
+  }
+  return {
+    kind,
+    lines,
+    subtotal,
+    discount,
+    total,
+    paid,
+    balance,
+    currency,
+    contact,
+    partyName,
+    partyPhone,
+    createContact: !contact && draft.contactId === "__new__" && draft.saveContact && can("contacts", "add"),
+  };
+}
+
+function createTrade(kind, draft) {
+  const prepared = prepareTrade(kind, draft);
+  if (prepared.error) return prepared;
+  const config = TRADE[kind];
+  const now = new Date().toISOString();
+  const user = currentUser();
+  let contact = prepared.contact;
+  if (prepared.createContact) {
+    contact = {
+      id: makeId("contacts"),
+      name: prepared.partyName,
+      type: config.partyType,
+      phone: prepared.partyPhone,
+      email: "",
+      balance: 0,
+      currency: prepared.currency,
+      status: "Active",
+      sourceName: `Added while recording a ${config.noun.toLowerCase()}`,
+      createdAt: now,
+      infoDismissed: true,
+    };
+    state.contacts.unshift(contact);
+  }
+
+  const id = makeId(kind);
+  const number = nextTradeNumber(kind);
+  const partyName = prepared.partyName || (kind === "sale" ? "Walk-in customer" : "");
+  const trade = {
+    id,
+    number,
+    date: draft.date,
+    contactId: contact?.id || "",
+    partyName,
+    partyPhone: prepared.partyPhone,
+    walkIn: !prepared.partyName,
+    currency: prepared.currency,
+    lines: prepared.lines,
+    subtotal: prepared.subtotal,
+    discount: prepared.discount,
+    total: prepared.total,
+    amountPaid: prepared.paid,
+    paymentMethod: prepared.paid > 0 ? draft.method || "Cash" : "",
+    dueDate: prepared.balance > 0 ? draft.dueDate || "" : "",
+    reference: String(draft.reference || "").trim(),
+    notes: String(draft.notes || "").trim(),
+    status: "Completed",
+    payments:
+      prepared.paid > 0
+        ? [{ id: makeId("payment"), date: draft.date, amount: prepared.paid, method: draft.method || "Cash", note: `Paid when the ${config.noun.toLowerCase()} was recorded`, by: user?.name || "" }]
+        : [],
+    createdAt: now,
+    createdBy: user?.name || "",
+  };
+
+  prepared.lines.forEach((line) => {
+    if (line.custom) return;
+    const item = state.inventory.find((entry) => entry.id === line.itemId);
+    const extra = {};
+    if (kind === "purchase") {
+      // The item's cost becomes the weighted average of stock on hand and this purchase.
+      const onHand = Math.max(0, parseMoney(item.quantity));
+      const previousCost = item.unitCost;
+      const newCost =
+        isBlank(previousCost) || onHand <= 0
+          ? line.unitPrice
+          : round2((onHand * parseMoney(previousCost) + line.quantity * line.unitPrice) / (onHand + line.quantity));
+      item.unitCost = newCost;
+      extra.previousCost = previousCost;
+      extra.newCost = newCost;
+    }
+    recordStockMovement(item, config.sign * line.quantity, {
+      type: config.movement,
+      reference: number,
+      referenceId: id,
+      referenceKind: kind,
+      party: partyName,
+      unitAmount: line.unitPrice,
+      date: draft.date,
+      extra,
+    });
+  });
+
+  if (prepared.total > 0) {
+    const entry = {
+      id: makeId("finance"),
+      date: draft.date,
+      type: config.financeType,
+      category: config.category,
+      description: `${config.noun} ${number}${partyName ? ` - ${partyName}` : ""}`,
+      amount: prepared.total,
+      amountPaid: prepared.paid,
+      payments: trade.payments.map((payment) => ({ ...payment })),
+      currency: prepared.currency,
+      status: prepared.balance > 0 ? "Pending" : "Paid",
+      dueDate: trade.dueDate,
+      paidOn: prepared.balance > 0 ? "" : draft.date,
+      party: partyName,
+      sourceType: kind,
+      sourceId: id,
+      reference: number,
+      notes: trade.notes,
+      sourceName: viewTitle(config.area),
+      createdAt: now,
+      infoDismissed: true,
+    };
+    state.finance.unshift(entry);
+    trade.financeId = entry.id;
+  }
+
+  state[config.list].unshift(trade);
+  addActivity(
+    `${config.noun} ${number}: ${partyName || "walk-in"} · ${formatCurrency(prepared.total, prepared.currency)}${
+      prepared.balance > 0 ? ` (${formatCurrency(prepared.balance, prepared.currency)} unpaid)` : ""
+    }`,
+    config.area,
+  );
+  return { trade };
+}
+
+function submitTrade() {
+  captureTradeForm();
+  const { kind } = editing;
+  const result = createTrade(kind, editing.draft);
+  if (result.error) {
+    showFormError(result.error);
+    return;
+  }
+  saveState();
+  closeModal();
+  rememberTab(TRADE[kind].area, "all");
+  if (currentView !== TRADE[kind].area && canOpenView(TRADE[kind].area)) setView(TRADE[kind].area);
+  else render();
+  showToast(`${TRADE[kind].noun} ${result.trade.number} saved`);
+}
+
+/* ----- Payments ----- */
+
+function openPaymentModal(financeId) {
+  const entry = state.finance.find((record) => record.id === financeId);
+  if (!entry || !canTakePayment(entry)) {
+    showToast("Your role cannot record payments for this entry");
+    return;
+  }
+  const due = outstandingOf(entry);
+  if (!due) {
+    showToast("This is already fully paid");
+    return;
+  }
+  const currency = recordCurrency(entry);
+  const incoming = entry.type === "Income";
+  editing = { kind: "payment", financeId };
+  setModalWide(false);
+  els.modalKicker.textContent = entry.reference || "Finance";
+  els.modalTitle.textContent = incoming ? "Receive payment" : "Record a payment you made";
+  els.recordForm.innerHTML = `
+    <div class="form-error" id="formError" hidden></div>
+    <div class="detail-grid">
+      <div><span>${incoming ? "From" : "To"}</span><strong>${escapeHtml(entry.party || "—")}</strong></div>
+      <div><span>For</span><strong>${escapeHtml(entry.description || entry.category)}</strong></div>
+      <div><span>Total</span><strong>${escapeHtml(formatCurrency(entry.amount, currency))}</strong></div>
+      <div><span>Already paid</span><strong>${escapeHtml(formatCurrency(entry.amountPaid || 0, currency))}</strong></div>
+      <div><span>Balance due</span><strong class="negative-text">${escapeHtml(formatCurrency(due, currency))}</strong></div>
+      ${entry.dueDate ? `<div><span>Due date</span><strong>${escapeHtml(formatDate(entry.dueDate))}</strong></div>` : ""}
+    </div>
+    <fieldset class="form-section">
+      <legend>Payment</legend>
+      <div class="form-grid">
+        <div class="field">
+          <label for="paymentAmount">Amount (${currency}) *</label>
+          <input id="paymentAmount" name="amount" type="number" min="0" step="0.01" max="${due}" value="${due}" required />
+          <small>Enter less for a part payment.</small>
+        </div>
+        <div class="field">
+          <label for="paymentDate">Date</label>
+          <input id="paymentDate" name="date" type="date" value="${todayIso()}" max="${todayIso()}" />
+        </div>
+        <div class="field">
+          <label for="paymentMethod">Method</label>
+          <select id="paymentMethod" name="method">${PAYMENT_METHODS.map((method) => `<option>${method}</option>`).join("")}</select>
+        </div>
+        <div class="field">
+          <label for="paymentNote">Note</label>
+          <input id="paymentNote" name="note" type="text" placeholder="Receipt no., cheque no., …" />
+        </div>
+      </div>
+    </fieldset>
+    <div class="form-actions">
+      <button class="button ghost" id="cancelFormBtn" type="button">Cancel</button>
+      <button class="button primary" type="submit">Save payment</button>
+    </div>
+  `;
+  els.modalBackdrop.hidden = false;
+  byId("paymentAmount").focus();
+}
+
+function applyPayment(entry, amount, { date, method, note = "" }) {
+  const payment = { id: makeId("payment"), date, amount, method, note, by: currentUser()?.name || "" };
+  entry.amountPaid = round2(parseMoney(entry.amountPaid) + amount);
+  entry.payments = [...(entry.payments || []), payment];
+  if (entry.amountPaid >= parseMoney(entry.amount) - 0.005) {
+    entry.status = "Paid";
+    entry.paidOn = date;
+  }
+  if (entry.sourceType) {
+    const trade = findTrade(entry.sourceType, entry.sourceId);
+    if (trade) {
+      trade.amountPaid = entry.amountPaid;
+      trade.payments = [...(trade.payments || []), { ...payment }];
+      if (!trade.paymentMethod) trade.paymentMethod = method;
+    }
+  }
+}
+
+function submitPayment() {
+  const entry = state.finance.find((record) => record.id === editing.financeId);
+  const form = els.recordForm.elements;
+  const due = outstandingOf(entry);
+  const amount = round2(parseMoney(form.amount.value));
+  const date = form.date.value || todayIso();
+  if (!entry || !canTakePayment(entry)) {
+    showFormError("This payment can no longer be recorded.");
+    return;
+  }
+  if (!(amount > 0) || amount > due + 0.005) {
+    showFormError(`Enter an amount above zero and up to ${formatCurrency(due, recordCurrency(entry))}.`);
+    return;
+  }
+  if (date > todayIso()) {
+    showFormError("The payment date can't be in the future.");
+    return;
+  }
+  applyPayment(entry, amount, { date, method: form.method.value, note: form.note.value.trim() });
+  addActivity(
+    `${entry.type === "Income" ? "Payment received" : "Payment made"}: ${formatCurrency(amount, recordCurrency(entry))} · ${entry.party || entry.description}`,
+    entry.sourceType ? TRADE[entry.sourceType].area : "finance",
+  );
+  saveState();
+  closeModal();
+  render();
+  showToast(outstandingOf(entry) ? "Part payment recorded" : "Fully paid");
+}
+
+/* ----- Cancelling a sale or purchase ----- */
+
+function openCancelTrade(kind, id) {
+  const config = TRADE[kind];
+  const trade = findTrade(kind, id);
+  if (!trade || trade.status === "Cancelled") return;
+  if (!can(config.area, "delete")) {
+    showToast(`Your role cannot cancel ${config.area}`);
+    return;
+  }
+  const blocked = cancelBlockers(kind, trade);
+  if (blocked) {
+    showToast(blocked);
+    return;
+  }
+  editing = { kind: "cancel", tradeKind: kind, tradeId: id };
+  setModalWide(false);
+  els.modalKicker.textContent = `${config.noun} ${trade.number}`;
+  els.modalTitle.textContent = `Cancel ${config.noun.toLowerCase()}`;
+  const stockLines = trade.lines.filter((line) => !line.custom);
+  const reasons =
+    kind === "sale"
+      ? ["Customer returned the items", "Entered by mistake", "Order cancelled", "Other"]
+      : ["Returned to supplier", "Entered by mistake", "Delivery cancelled", "Other"];
+  els.recordForm.innerHTML = `
+    <div class="form-error" id="formError" hidden></div>
+    <div class="form-notice">
+      <strong>What cancelling does</strong>
+      <span>
+        ${
+          stockLines.length
+            ? `${kind === "sale" ? "Puts back" : "Removes"} stock: ${escapeHtml(
+                stockLines.map((line) => `${line.name} ${kind === "sale" ? "+" : "−"}${formatNumber(line.quantity)}`).join(", "),
+              )}. `
+            : ""
+        }Removes the ${escapeHtml(formatCurrency(trade.total, trade.currency))} ${kind === "sale" ? "income" : "expense"} and any balance still due.
+        ${
+          parseMoney(trade.amountPaid) > 0
+            ? `${escapeHtml(formatCurrency(trade.amountPaid, trade.currency))} was already paid. Remember to ${
+                kind === "sale" ? "refund the customer" : "collect it back from the supplier"
+              }.`
+            : ""
+        }
+        The ${config.noun.toLowerCase()} stays in the records, marked as cancelled.
+      </span>
+    </div>
+    <fieldset class="form-section">
+      <legend>Reason</legend>
+      <div class="form-grid">
+        <div class="field">
+          <label for="cancelReason">Reason *</label>
+          <select id="cancelReason" name="reason">${reasons.map((reason) => `<option>${reason}</option>`).join("")}</select>
+        </div>
+        <div class="field full">
+          <label for="cancelNote">Details</label>
+          <textarea id="cancelNote" name="note" placeholder="Optional"></textarea>
+        </div>
+      </div>
+    </fieldset>
+    <div class="form-actions">
+      <button class="button ghost" id="cancelFormBtn" type="button">Keep ${config.noun.toLowerCase()}</button>
+      <button class="button danger-ghost" type="submit">Cancel ${config.noun.toLowerCase()}</button>
+    </div>
+  `;
+  els.modalBackdrop.hidden = false;
+}
+
+function cancelBlockers(kind, trade) {
+  if (kind !== "purchase") return "";
+  const short = trade.lines
+    .filter((line) => !line.custom)
+    .map((line) => ({ line, item: state.inventory.find((entry) => entry.id === line.itemId) }))
+    .filter(({ line, item }) => item && parseMoney(item.quantity) < line.quantity);
+  if (!short.length) return "";
+  return `Can't cancel ${trade.number}: some of this stock has already been sold (${short
+    .map(({ line, item }) => `${line.name}: ${formatNumber(item.quantity)} left of ${formatNumber(line.quantity)}`)
+    .join(", ")}). Use Adjust stock to record a return instead.`;
+}
+
+function submitCancel() {
+  const { tradeKind: kind, tradeId } = editing;
+  const config = TRADE[kind];
+  const trade = findTrade(kind, tradeId);
+  if (!trade || trade.status === "Cancelled") {
+    closeModal();
+    return;
+  }
+  const blocked = cancelBlockers(kind, trade);
+  if (blocked) {
+    showFormError(blocked);
+    return;
+  }
+  const form = els.recordForm.elements;
+  const reason = [form.reason.value, form.note.value.trim()].filter(Boolean).join(": ");
+  const now = new Date().toISOString();
+  trade.status = "Cancelled";
+  trade.cancelledAt = now;
+  trade.cancelledBy = currentUser()?.name || "";
+  trade.cancelReason = reason;
+  trade.lines.forEach((line) => {
+    if (line.custom) return;
+    const item = state.inventory.find((entry) => entry.id === line.itemId);
+    if (!item) return;
+    recordStockMovement(item, -config.sign * line.quantity, {
+      type: config.reversal,
+      reference: trade.number,
+      referenceId: trade.id,
+      referenceKind: kind,
+      party: trade.partyName,
+      unitAmount: line.unitPrice,
+      reason,
+    });
+  });
+  const entry = state.finance.find((record) => record.id === trade.financeId);
+  if (entry) {
+    entry.cancelled = true;
+    entry.cancelReason = reason;
+    entry.cancelledAt = now;
+  }
+  addActivity(`${config.noun} ${trade.number} cancelled (${reason})`, config.area);
+  saveState();
+  closeModal();
+  render();
+  showToast(`${config.noun} ${trade.number} cancelled`);
+}
+
+/* ----- Stock adjustments ----- */
+
+function openAdjustStock(itemId) {
+  const item = state.inventory.find((entry) => entry.id === itemId);
+  if (!item || !can("inventory", "edit")) return;
+  editing = { kind: "adjust", itemId };
+  setModalWide(false);
+  els.modalKicker.textContent = viewTitle("inventory");
+  els.modalTitle.textContent = `Adjust stock · ${item.name}`;
+  els.recordForm.innerHTML = `
+    <div class="form-error" id="formError" hidden></div>
+    <div class="detail-grid">
+      <div><span>In stock now</span><strong>${escapeHtml(formatNumber(item.quantity))}</strong></div>
+      <div><span>${escapeHtml(fieldLabel("inventory", "sku"))}</span><strong>${escapeHtml(item.sku || "—")}</strong></div>
+    </div>
+    <p class="muted-note">Use this for changes that are not a sale or purchase: counting errors, damage, expiry, loss, or items used by the business.</p>
+    <fieldset class="form-section">
+      <legend>Change</legend>
+      <div class="form-grid">
+        <div class="field full">
+          <span class="field-label">What happened?</span>
+          <div class="choice-pills">
+            <label class="choice-pill"><input type="radio" name="action" value="remove" checked /><span>Remove stock</span></label>
+            <label class="choice-pill"><input type="radio" name="action" value="add" /><span>Add stock</span></label>
+            <label class="choice-pill"><input type="radio" name="action" value="count" /><span>Set to counted amount</span></label>
+          </div>
+        </div>
+        <div class="field">
+          <label for="adjustQuantity">Quantity *</label>
+          <input id="adjustQuantity" name="quantity" type="number" min="0" step="any" required />
+        </div>
+        <div class="field">
+          <label for="adjustReason">Reason *</label>
+          <select id="adjustReason" name="reason">${ADJUSTMENT_REASONS.map((reason) => `<option>${reason}</option>`).join("")}</select>
+        </div>
+        <div class="field">
+          <label for="adjustDate">Date</label>
+          <input id="adjustDate" name="date" type="date" value="${todayIso()}" max="${todayIso()}" />
+        </div>
+        <div class="field full">
+          <label for="adjustNote">Details</label>
+          <input id="adjustNote" name="note" type="text" placeholder="Optional, e.g. batch number or who counted" />
+        </div>
+      </div>
+    </fieldset>
+    <div class="form-actions">
+      <button class="button ghost" id="cancelFormBtn" type="button">Cancel</button>
+      <button class="button primary" type="submit">Save adjustment</button>
+    </div>
+  `;
+  els.modalBackdrop.hidden = false;
+  byId("adjustQuantity").focus();
+}
+
+function submitAdjustment() {
+  const item = state.inventory.find((entry) => entry.id === editing.itemId);
+  if (!item) {
+    closeModal();
+    return;
+  }
+  const form = els.recordForm;
+  const action = form.querySelector('input[name="action"]:checked')?.value || "remove";
+  const raw = form.elements.quantity.value;
+  const quantity = parseMoney(raw);
+  const current = parseMoney(item.quantity);
+  const date = form.elements.date.value || todayIso();
+  if (isBlank(raw) || quantity < 0 || (action !== "count" && quantity <= 0)) {
+    showFormError("Enter a quantity above zero.");
+    return;
+  }
+  const change = round3(action === "add" ? quantity : action === "remove" ? -quantity : quantity - current);
+  if (!change) {
+    showFormError(`The counted amount matches the current stock (${formatNumber(current)}). Nothing to change.`);
+    return;
+  }
+  if (current + change < -0.0005) {
+    showFormError(`You can't remove more than the ${formatNumber(current)} in stock.`);
+    return;
+  }
+  if (date > todayIso()) {
+    showFormError("The date can't be in the future.");
+    return;
+  }
+  const reason = [form.elements.reason.value, form.elements.note.value.trim()].filter(Boolean).join(": ");
+  recordStockMovement(item, change, { type: "Adjustment", reason, date });
+  addActivity(`Stock adjusted: ${item.name} ${change > 0 ? "+" : ""}${formatNumber(change)} (${reason})`, "inventory");
+  saveState();
+  closeModal();
+  render();
+  showToast(`${item.name}: now ${formatNumber(item.quantity)} in stock`);
+}
+
+function submitTransactionForm() {
+  if (editing.kind === "sale" || editing.kind === "purchase") submitTrade();
+  else if (editing.kind === "payment") submitPayment();
+  else if (editing.kind === "cancel") submitCancel();
+  else if (editing.kind === "adjust") submitAdjustment();
+}
+
+/* ----- Read-only details: a sale or purchase, an item's history, a contact's history ----- */
+
+function openReadOnlyModal(kicker, title, body, actions = "") {
+  editing = { kind: "view" };
+  setModalWide(true);
+  els.modalKicker.textContent = kicker;
+  els.modalTitle.textContent = title;
+  els.recordForm.innerHTML = `
+    ${body}
+    <div class="form-actions">
+      ${actions}
+      <button class="button ghost" id="cancelFormBtn" type="button">Close</button>
+    </div>
+  `;
+  els.modalBackdrop.hidden = false;
+}
+
+function openTradeDetails(kind, id) {
+  const config = TRADE[kind];
+  const trade = findTrade(kind, id);
+  if (!trade || !can(config.area, "view")) return;
+  const money = (value) => formatCurrency(value, trade.currency);
+  const status = tradeStatus(trade);
+  const balance = tradeBalance(trade);
+  const entry = state.finance.find((record) => record.id === trade.financeId);
+  const sensitive = canAccess("sensitiveNumbers");
+  const share = trade.subtotal ? trade.total / trade.subtotal : 1;
+  const costKnown = trade.lines.filter((line) => !line.custom && line.unitCost !== "");
+  const cost = round2(costKnown.reduce((sum, line) => sum + line.quantity * parseMoney(line.unitCost), 0));
+  const body = `
+    <div class="detail-grid">
+      <div><span>Date</span><strong>${escapeHtml(formatDate(trade.date))}</strong></div>
+      <div><span>${config.party}</span><strong>${escapeHtml(trade.partyName || "—")}</strong>${
+        trade.partyPhone ? `<small>${escapeHtml(trade.partyPhone)}</small>` : trade.walkIn ? "<small>No details recorded</small>" : ""
+      }</div>
+      <div><span>Status</span><strong>${badge(status.label, status.tone)}</strong></div>
+      <div><span>Recorded by</span><strong>${escapeHtml(trade.createdBy || "—")}</strong><small>${escapeHtml(formatDateTime(trade.createdAt))}</small></div>
+      ${trade.reference ? `<div><span>${kind === "purchase" ? "Supplier bill no." : "Reference"}</span><strong>${escapeHtml(trade.reference)}</strong></div>` : ""}
+      ${trade.dueDate && balance > 0 ? `<div><span>Balance due by</span><strong>${escapeHtml(formatDate(trade.dueDate))}</strong></div>` : ""}
+    </div>
+    ${
+      trade.status === "Cancelled"
+        ? `<div class="form-error">Cancelled ${escapeHtml(formatDateTime(trade.cancelledAt))} by ${escapeHtml(trade.cancelledBy || "—")}: ${escapeHtml(
+            trade.cancelReason || "no reason given",
+          )}. Stock and ${kind === "sale" ? "income" : "expense"} were reversed.</div>`
+        : ""
+    }
+    <div class="table-wrap bordered">
+      <table class="data-table compact">
+        <thead><tr><th>Item</th><th class="num">Qty</th><th class="num">${config.priceLabel} each</th><th class="num">Total</th></tr></thead>
+        <tbody>
+          ${trade.lines
+            .map((line) => {
+              const note =
+                line.custom
+                  ? "Not from stock"
+                  : kind === "sale" && line.listPrice !== "" && parseMoney(line.listPrice) !== line.unitPrice
+                    ? `List ${money(line.listPrice)}`
+                    : line.sku;
+              return `<tr><td>${titleCell(line.name, note)}</td><td class="num">${formatNumber(line.quantity)}</td><td class="num">${escapeHtml(
+                money(line.unitPrice),
+              )}</td><td class="num">${escapeHtml(money(line.lineTotal))}</td></tr>`;
+            })
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+    <div class="trade-totals readonly">
+      <div><span>Subtotal</span><strong>${escapeHtml(money(trade.subtotal))}</strong></div>
+      ${trade.discount ? `<div><span>Discount</span><strong>− ${escapeHtml(money(trade.discount))}</strong></div>` : ""}
+      <div class="grand"><span>Total</span><strong>${escapeHtml(money(trade.total))}</strong></div>
+      <div><span>Paid</span><strong class="money-in">${escapeHtml(money(trade.amountPaid))}</strong></div>
+      <div><span>Balance</span><strong class="${balance > 0 ? "negative-text" : ""}">${escapeHtml(money(balance))}</strong></div>
+      ${
+        kind === "sale" && sensitive && costKnown.length
+          ? `<div><span>Gross profit</span><strong>${escapeHtml(money(round2(trade.total - cost)))}</strong><small>${
+              costKnown.length < trade.lines.filter((line) => !line.custom).length ? "Some items had no cost recorded" : `Cost of goods ${money(cost)}`
+            }</small></div>`
+          : ""
+      }
+    </div>
+    <h3 class="detail-heading">Payments</h3>
+    ${
+      (trade.payments || []).length
+        ? `<div class="table-wrap bordered"><table class="data-table compact"><thead><tr><th>Date</th><th>Method</th><th>Note</th><th class="num">Amount</th><th></th></tr></thead><tbody>${trade.payments
+            .map(
+              (payment) =>
+                `<tr><td>${escapeHtml(formatDate(payment.date))}</td><td>${escapeHtml(payment.method || "—")}</td><td>${escapeHtml(
+                  [payment.receiptNumber, payment.note, payment.by].filter(Boolean).join(" · ") || "—",
+                )}</td><td class="num">${escapeHtml(money(payment.amount))}</td><td><div class="row-actions">${
+                  entry && entry.payments?.some((item) => item.id === payment.id)
+                    ? `<button type="button" data-document="payment:${escapeHtml(entry.id)}:${escapeHtml(payment.id)}">Receipt</button>`
+                    : ""
+                }</div></td></tr>`,
+            )
+            .join("")}</tbody></table></div>`
+        : `<p class="muted-note">No payments recorded yet.</p>`
+    }
+    ${trade.notes ? `<h3 class="detail-heading">Notes</h3><p>${escapeHtml(trade.notes)}</p>` : ""}
+  `;
+  const actions = [
+    `<button class="button ghost" type="button" data-document="${kind}:${escapeHtml(trade.id)}">Generate invoice</button>`,
+    balance > 0 && canTakePayment(entry)
+      ? `<button class="button primary" type="button" data-mark-paid="${escapeHtml(entry.id)}">${kind === "sale" ? "Receive payment" : "Pay supplier"}</button>`
+      : "",
+    trade.status !== "Cancelled" && can(config.area, "delete")
+      ? `<button class="button danger-ghost" type="button" data-cancel-trade="${kind}:${escapeHtml(trade.id)}">Cancel ${config.noun.toLowerCase()}</button>`
+      : "",
+  ].join("");
+  openReadOnlyModal(viewTitle(config.area), `${config.noun} ${trade.number}`, body, actions);
+}
+
+function openStockHistory(itemId) {
+  const item = state.inventory.find((entry) => entry.id === itemId);
+  if (!item) return;
+  const moves = state.stockMovements.filter((move) => move.itemId === itemId);
+  const units = (type) => moves.filter((move) => move.type === type).reduce((sum, move) => sum + Math.abs(move.change), 0);
+  const body = `
+    <div class="detail-grid">
+      <div><span>In stock now</span><strong>${escapeHtml(formatNumber(item.quantity))}</strong></div>
+      <div><span>Sold</span><strong>${escapeHtml(formatNumber(units("Sale") - units("Sale cancelled")))}</strong></div>
+      <div><span>Bought</span><strong>${escapeHtml(formatNumber(units("Purchase") - units("Purchase cancelled")))}</strong></div>
+      <div><span>Adjustments</span><strong>${escapeHtml(formatNumber(moves.filter((move) => move.type === "Adjustment").length))}</strong></div>
+    </div>
+    ${movementTableHtml(moves, { showItem: false })}
+  `;
+  openReadOnlyModal(viewTitle("inventory"), `Stock history · ${item.name}`, body);
+}
+
+function contactTrades(contact) {
+  const name = String(contact.name || "").trim().toLowerCase();
+  const matches = (trade) => trade.contactId === contact.id || (!trade.contactId && String(trade.partyName || "").trim().toLowerCase() === name);
+  return {
+    sales: state.sales.filter(matches),
+    purchases: state.purchases.filter(matches),
+  };
+}
+
+function openContactHistory(contactId) {
+  const contact = state.contacts.find((entry) => entry.id === contactId);
+  if (!contact) return;
+  const { sales, purchases } = contactTrades(contact);
+  const live = (list) => list.filter((trade) => trade.status !== "Cancelled");
+  const sum = (list, amountOf) => formatMoneyTotals(sumByCurrency(list, amountOf));
+  const rows = [
+    ...(can("sales", "view") ? sales.map((trade) => ({ kind: "sale", trade })) : []),
+    ...(can("purchases", "view") ? purchases.map((trade) => ({ kind: "purchase", trade })) : []),
+  ].sort((a, b) => String(b.trade.date).localeCompare(String(a.trade.date)));
+  const body = `
+    <div class="detail-grid">
+      <div><span>Type</span><strong>${escapeHtml(contact.type || "—")}</strong></div>
+      <div><span>Phone</span><strong>${escapeHtml(contact.phone || "—")}</strong></div>
+      ${can("sales", "view") ? `<div><span>Bought from you</span><strong>${escapeHtml(sum(live(sales), (trade) => trade.total))}</strong><small>${live(sales).length} sales</small></div>` : ""}
+      ${can("purchases", "view") ? `<div><span>You bought from them</span><strong>${escapeHtml(sum(live(purchases), (trade) => trade.total))}</strong><small>${live(purchases).length} purchases</small></div>` : ""}
+      <div><span>Balance due</span><strong>${contactDuesHtml(contact)}</strong></div>
+    </div>
+    ${
+      rows.length
+        ? `<div class="table-wrap bordered"><table class="data-table compact"><thead><tr><th>No.</th><th>Date</th><th>Items</th><th class="num">Total</th><th class="num">Balance</th><th>Status</th><th></th></tr></thead><tbody>${rows
+            .map(({ kind, trade }) => {
+              const status = tradeStatus(trade);
+              return `<tr>
+                <td><strong>${escapeHtml(trade.number)}</strong><br><span class="muted-note">${kind === "sale" ? "Sale" : "Purchase"}</span></td>
+                <td>${escapeHtml(formatDate(trade.date))}</td>
+                <td>${escapeHtml(tradeItemsSummary(trade))}</td>
+                <td class="num">${escapeHtml(formatCurrency(trade.total, trade.currency))}</td>
+                <td class="num">${escapeHtml(formatCurrency(tradeBalance(trade), trade.currency))}</td>
+                <td>${badge(status.label, status.tone)}</td>
+                <td><div class="row-actions"><button type="button" data-view-trade="${kind}:${escapeHtml(trade.id)}">Open</button></div></td>
+              </tr>`;
+            })
+            .join("")}</tbody></table></div>`
+        : `<div class="empty-state">No sales or purchases recorded with ${escapeHtml(contact.name)} yet.</div>`
+    }
+  `;
+  openReadOnlyModal(viewTitle("contacts"), contact.name, body);
+}
+
+function movementTableHtml(moves, { showItem = true, limit = 300 } = {}) {
+  if (!moves.length) return `<div class="empty-state">No stock changes recorded yet.</div>`;
+  const shown = moves.slice(0, limit);
+  return `
+    <div class="table-wrap ${showItem ? "" : "bordered"}">
+      <table class="data-table compact">
+        <thead>
+          <tr>
+            <th>Date</th>
+            ${showItem ? "<th>Item</th>" : ""}
+            <th>Change type</th>
+            <th class="num">Change</th>
+            <th class="num">Stock after</th>
+            <th>Reference</th>
+            <th>Who / why</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${shown
+            .map(
+              (move) => `
+            <tr>
+              <td>${escapeHtml(formatDate(move.date))}</td>
+              ${showItem ? `<td>${titleCell(move.itemName, move.sku)}</td>` : ""}
+              <td>${movementBadge(move.type)}</td>
+              <td class="num"><strong class="${move.change > 0 ? "money-in" : "negative-text"}">${move.change > 0 ? "+" : "−"}${escapeHtml(
+                formatNumber(Math.abs(move.change)),
+              )}</strong></td>
+              <td class="num">${escapeHtml(formatNumber(move.balanceAfter))}</td>
+              <td>${
+                move.referenceId && move.referenceKind && can(TRADE[move.referenceKind].area, "view")
+                  ? `<button type="button" class="link-button" data-view-trade="${move.referenceKind}:${escapeHtml(move.referenceId)}">${escapeHtml(move.reference)}</button>`
+                  : move.type === "Adjustment"
+                    ? `<button type="button" class="link-button" data-document="movement:${escapeHtml(move.id)}">${escapeHtml(move.documentNumber || "Adjustment note")}</button>`
+                    : escapeHtml(move.reference || "—")
+              }</td>
+              <td>${titleCell(move.party || move.reason || "—", [move.party ? move.reason : "", move.by].filter(Boolean).join(" · "))}</td>
+            </tr>
+          `,
+            )
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+    ${moves.length > limit ? `<p class="muted-note">Showing the latest ${limit} of ${formatNumber(moves.length)} changes.</p>` : ""}
+  `;
+}
+
+/* ---------- Invoices, receipts, and vouchers ----------
+ *
+ * Every recorded transaction can produce a printable document:
+ * - Sale -> Sales invoice      - Purchase -> Purchase invoice (goods received)
+ * - Payment -> Payment receipt - Other finance entry -> Receipt or payment voucher
+ * - Stock adjustment -> Stock adjustment note
+ * Each document can be shown as an A4 invoice or an 80 mm shop receipt. Documents
+ * are built from the saved record, so a reprint always matches what was recorded.
+ */
+
+const DOCUMENT_FORMAT_KEY = "ledgerflow-document-format";
+let documentFormat = (() => {
+  try {
+    return localStorage.getItem(DOCUMENT_FORMAT_KEY) === "receipt" ? "receipt" : "a4";
+  } catch (error) {
+    return "a4";
+  }
+})();
+let activeDocument = null;
+
+const CURRENCY_WORDS = {
+  PKR: ["Pakistani Rupees", "Paisa", true],
+  INR: ["Indian Rupees", "Paise", true],
+  USD: ["US Dollars", "Cents"],
+  EUR: ["Euros", "Cents"],
+  GBP: ["Pounds Sterling", "Pence"],
+  AED: ["UAE Dirhams", "Fils"],
+  SAR: ["Saudi Riyals", "Halalas"],
+  CNY: ["Chinese Yuan", "Fen"],
+  JPY: ["Japanese Yen", "Sen"],
+  CAD: ["Canadian Dollars", "Cents"],
+  AUD: ["Australian Dollars", "Cents"],
+};
+
+function numberToWords(value, southAsian = false) {
+  const ones = [
+    "", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve",
+    "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen",
+  ];
+  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+  const belowThousand = (number) => {
+    const parts = [];
+    if (number >= 100) {
+      parts.push(`${ones[Math.floor(number / 100)]} Hundred`);
+      number %= 100;
+    }
+    if (number >= 20) parts.push(`${tens[Math.floor(number / 10)]}${number % 10 ? `-${ones[number % 10]}` : ""}`);
+    else if (number > 0) parts.push(ones[number]);
+    return parts.join(" ");
+  };
+  let number = Math.floor(Math.abs(value));
+  if (!number) return "Zero";
+  const parts = [];
+  const scales = southAsian
+    ? [
+        [1e7, "Crore"],
+        [1e5, "Lakh"],
+        [1e3, "Thousand"],
+      ]
+    : [
+        [1e12, "Trillion"],
+        [1e9, "Billion"],
+        [1e6, "Million"],
+        [1e3, "Thousand"],
+      ];
+  scales.forEach(([size, name]) => {
+    if (number >= size) {
+      const count = Math.floor(number / size);
+      parts.push(`${count >= 1000 ? numberToWords(count, southAsian) : belowThousand(count)} ${name}`);
+      number %= size;
+    }
+  });
+  if (number) parts.push(belowThousand(number));
+  return parts.join(" ");
+}
+
+function amountInWords(amount, currency) {
+  const [major, minor, southAsian] = CURRENCY_WORDS[currency] || [currency, "Cents", false];
+  const absolute = Math.abs(round2(parseMoney(amount)));
+  const whole = Math.floor(absolute);
+  const fraction = Math.round((absolute - whole) * 100);
+  return `${major} ${numberToWords(whole, southAsian)}${fraction ? ` and ${numberToWords(fraction)} ${minor}` : ""} Only`;
+}
+
+function plainAmount(value) {
+  return new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(parseMoney(value));
+}
+
+function nextDocumentNumber(counter, prefix) {
+  state.counters[counter] = (Number(state.counters[counter]) || 0) + 1;
+  return `${prefix}-${String(state.counters[counter]).padStart(4, "0")}`;
+}
+
+function contactForParty(contactId, name) {
+  if (contactId) {
+    const byId = state.contacts.find((contact) => contact.id === contactId);
+    if (byId) return byId;
+  }
+  const key = String(name || "").trim().toLowerCase();
+  return key ? state.contacts.find((contact) => contact.name.trim().toLowerCase() === key) || null : null;
+}
+
+function partyBlock(label, name, phone, contactId) {
+  const contact = contactForParty(contactId, name);
+  return {
+    label,
+    name: name || "—",
+    lines: [phone || contact?.phone, contact?.email, contact?.billingAddress].filter((line) => !isBlank(line)),
+  };
+}
+
+function paymentStamp(total, paid, cancelled) {
+  if (cancelled) return { label: "Cancelled", tone: "void" };
+  if (total <= 0 || paid >= total - 0.005) return { label: "Paid", tone: "paid" };
+  if (paid > 0) return { label: "Partially paid", tone: "partial" };
+  return { label: "Unpaid", tone: "unpaid" };
+}
+
+function markDocumentPrinted(record) {
+  record.printCount = (Number(record.printCount) || 0) + 1;
+  record.lastPrintedAt = new Date().toISOString();
+  saveState();
+}
+
+/* ----- Document specs built from saved records ----- */
+
+function tradeDocument(kind, trade) {
+  const config = TRADE[kind];
+  const balance = tradeBalance(trade);
+  const paid = parseMoney(trade.amountPaid);
+  const sale = kind === "sale";
+  return {
+    record: trade,
+    title: sale ? "Sales Invoice" : "Purchase Invoice",
+    receiptTitle: sale ? (balance <= 0 && trade.status !== "Cancelled" ? "Sales Receipt" : "Sales Invoice") : "Goods Received",
+    subtitle: sale ? "" : "Goods received from supplier",
+    number: trade.number,
+    numberLabel: sale ? "Invoice no." : "Purchase no.",
+    currency: trade.currency,
+    meta: [
+      ["Date", formatDate(trade.date)],
+      ...(balance > 0 && trade.dueDate ? [["Due date", formatDate(trade.dueDate)]] : []),
+      ...(trade.paymentMethod ? [["Payment", trade.paymentMethod]] : []),
+      ...(trade.reference ? [[sale ? "Reference" : "Supplier bill no.", trade.reference]] : []),
+      [sale ? "Served by" : "Received by", trade.createdBy || "—"],
+    ],
+    party: partyBlock(sale ? "Bill to" : "Supplier", trade.partyName, trade.partyPhone, trade.contactId),
+    showQuantity: true,
+    priceLabel: sale ? "Unit price" : "Unit cost",
+    items: trade.lines.map((line) => ({
+      name: line.name,
+      detail: line.custom ? (sale ? "Service / not from stock" : "Not added to stock") : line.sku,
+      quantity: line.quantity,
+      unitPrice: line.unitPrice,
+      amount: line.lineTotal,
+    })),
+    totals: [
+      ["Subtotal", trade.subtotal],
+      ...(trade.discount ? [["Discount", -trade.discount]] : []),
+      ["Total", trade.total, "grand"],
+      [sale ? "Amount received" : "Amount paid", trade.status === "Cancelled" ? 0 : paid],
+      ["Balance due", balance, balance > 0 ? "due" : ""],
+    ],
+    amountInWords: trade.total,
+    payments: (trade.payments || []).map((payment) => ({ ...payment })),
+    stamp: paymentStamp(trade.total, paid, trade.status === "Cancelled"),
+    cancelled: trade.status === "Cancelled" ? `Cancelled on ${formatDate(String(trade.cancelledAt).slice(0, 10))}: ${trade.cancelReason || "no reason given"}` : "",
+    notes: trade.notes,
+    terms:
+      balance > 0 && trade.status !== "Cancelled"
+        ? `Balance of ${formatCurrency(balance, trade.currency)} is due${trade.dueDate ? ` by ${formatDate(trade.dueDate)}` : ""}.`
+        : "",
+    signatures: sale ? ["Authorized signature", "Customer signature"] : ["Received by", "Supplier signature"],
+    thanks: sale ? "Thank you for your business." : "",
+  };
+}
+
+function financeDocument(entry) {
+  if (!entry.documentNumber) {
+    entry.documentNumber = nextDocumentNumber("voucher", entry.type === "Income" ? "RV" : "PV");
+    saveState();
+  }
+  const income = entry.type === "Income";
+  const paid = isUnpaid(entry) ? parseMoney(entry.amountPaid) : parseMoney(entry.amount);
+  const balance = outstandingOf(entry);
+  return {
+    record: entry,
+    title: income ? "Receipt Voucher" : "Payment Voucher",
+    receiptTitle: income ? "Receipt" : "Payment Voucher",
+    subtitle: entry.category || "",
+    number: entry.documentNumber,
+    numberLabel: "Voucher no.",
+    currency: recordCurrency(entry),
+    meta: [
+      ["Date", formatDate(entry.date)],
+      ...(balance > 0 && entry.dueDate ? [["Due date", formatDate(entry.dueDate)]] : []),
+      ["Category", entry.category || "—"],
+      ...(entry.reference ? [["Reference", entry.reference]] : []),
+    ],
+    party: entry.party ? partyBlock(income ? "Received from" : "Paid to", entry.party, "", "") : null,
+    showQuantity: false,
+    priceLabel: "",
+    items: [{ name: entry.description || entry.category || "Transaction", detail: entry.category, quantity: 1, unitPrice: entry.amount, amount: entry.amount }],
+    totals: [
+      ["Total", parseMoney(entry.amount), "grand"],
+      [income ? "Amount received" : "Amount paid", paid],
+      ["Balance due", balance, balance > 0 ? "due" : ""],
+    ],
+    amountInWords: entry.amount,
+    payments: (entry.payments || []).map((payment) => ({ ...payment })),
+    stamp: paymentStamp(parseMoney(entry.amount), paid, entry.cancelled),
+    cancelled: entry.cancelled ? `Cancelled: ${entry.cancelReason || ""}` : "",
+    notes: entry.notes,
+    terms: "",
+    signatures: income ? ["Received by", "Paid by"] : ["Approved by", "Received by"],
+    thanks: income ? "Thank you." : "",
+  };
+}
+
+function paymentDocument(entry, paymentId) {
+  const payment = (entry.payments || []).find((item) => item.id === paymentId);
+  if (!payment) return null;
+  const trade = entry.sourceType ? findTrade(entry.sourceType, entry.sourceId) : null;
+  if (!payment.receiptNumber) {
+    payment.receiptNumber = nextDocumentNumber("receipt", entry.type === "Income" ? "RCPT" : "PAY");
+    const tradePayment = trade?.payments?.find((item) => item.id === paymentId);
+    if (tradePayment) tradePayment.receiptNumber = payment.receiptNumber;
+    saveState();
+  }
+  const income = entry.type === "Income";
+  const paidUpTo = round2(
+    (entry.payments || [])
+      .slice(0, entry.payments.indexOf(payment) + 1)
+      .reduce((sum, item) => sum + parseMoney(item.amount), 0),
+  );
+  const balanceAfter = round2(Math.max(0, parseMoney(entry.amount) - paidUpTo));
+  const againstNumber = trade?.number || entry.documentNumber || entry.reference || "";
+  return {
+    record: payment,
+    title: income ? "Payment Receipt" : "Payment Voucher",
+    receiptTitle: income ? "Payment Receipt" : "Payment Voucher",
+    subtitle: againstNumber ? `Against ${againstNumber}` : "",
+    number: payment.receiptNumber,
+    numberLabel: "Receipt no.",
+    currency: recordCurrency(entry),
+    meta: [
+      ["Payment date", formatDate(payment.date)],
+      ["Method", payment.method || "—"],
+      ...(againstNumber ? [["Against", againstNumber]] : []),
+      ...(payment.note ? [["Note", payment.note]] : []),
+      ["Recorded by", payment.by || "—"],
+    ],
+    party: partyBlock(income ? "Received from" : "Paid to", trade?.partyName || entry.party, trade?.partyPhone, trade?.contactId),
+    showQuantity: false,
+    priceLabel: "",
+    items: [
+      {
+        name: income ? `Payment received for ${entry.description || againstNumber}` : `Payment made for ${entry.description || againstNumber}`,
+        detail: `Invoice total ${formatCurrency(entry.amount, recordCurrency(entry))}`,
+        quantity: 1,
+        unitPrice: payment.amount,
+        amount: payment.amount,
+      },
+    ],
+    totals: [
+      [income ? "Amount received" : "Amount paid", payment.amount, "grand"],
+      ["Paid to date", paidUpTo],
+      ["Balance remaining", balanceAfter, balanceAfter > 0 ? "due" : ""],
+    ],
+    amountInWords: payment.amount,
+    payments: [],
+    stamp: { label: income ? "Received" : "Paid", tone: "paid" },
+    cancelled: entry.cancelled ? "The invoice this payment belongs to was cancelled." : "",
+    notes: "",
+    terms: "",
+    signatures: income ? ["Received by", "Customer signature"] : ["Paid by", "Received by"],
+    thanks: income ? "Thank you for your payment." : "",
+  };
+}
+
+function movementDocument(move) {
+  if (!move.documentNumber) {
+    move.documentNumber = nextDocumentNumber("adjustment", "ADJ");
+    saveState();
+  }
+  const item = state.inventory.find((entry) => entry.id === move.itemId);
+  const before = round3(parseMoney(move.balanceAfter) - parseMoney(move.change));
+  return {
+    record: move,
+    title: move.type === "Adjustment" ? "Stock Adjustment Note" : "Stock Record",
+    receiptTitle: move.type === "Adjustment" ? "Stock Adjustment" : "Stock Record",
+    subtitle: move.type,
+    number: move.documentNumber,
+    numberLabel: "Note no.",
+    currency: move.currency || orgCurrency(),
+    meta: [
+      ["Date", formatDate(move.date)],
+      ["Item", move.itemName],
+      ...(move.sku ? [[fieldLabel("inventory", "sku"), move.sku]] : []),
+      ["Recorded by", move.by || "—"],
+    ],
+    party: null,
+    showQuantity: false,
+    priceLabel: "",
+    stock: {
+      rows: [
+        ["Stock before", formatNumber(before)],
+        ["Change", `${move.change > 0 ? "+" : "−"}${formatNumber(Math.abs(move.change))}`],
+        ["Stock after", formatNumber(move.balanceAfter)],
+        ["Stock now", item ? formatNumber(item.quantity) : "Item removed"],
+      ],
+      reason: move.reason || "—",
+    },
+    items: [],
+    totals: [],
+    amountInWords: null,
+    payments: [],
+    stamp: { label: move.change > 0 ? "Stock in" : "Stock out", tone: move.change > 0 ? "paid" : "partial" },
+    cancelled: "",
+    notes: "",
+    terms: "",
+    signatures: ["Recorded by", "Approved by"],
+    thanks: "",
+  };
+}
+
+/* ----- Rendering ----- */
+
+function documentBusinessHeader(org) {
+  const initials =
+    String(org.name || "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((word) => word.charAt(0).toUpperCase())
+      .join("") || "LF";
+  const contactLines = [
+    org.businessAddress,
+    [org.businessPhone ? `Phone: ${org.businessPhone}` : "", org.businessEmail ? `Email: ${org.businessEmail}` : ""].filter(Boolean).join("  ·  "),
+    org.registrationNumber ? `Tax / Reg. No: ${org.registrationNumber}` : "",
+  ].filter(Boolean);
+  return { initials, contactLines };
+}
+
+function documentHtml(spec, format) {
+  const org = state.organization;
+  const { initials, contactLines } = documentBusinessHeader(org);
+  const money = (value) => formatCurrency(value, spec.currency);
+  const copyLabel = Number(spec.record.printCount) > 0 ? "Copy" : "Original";
+  const generated = formatDateTime(new Date().toISOString());
+  const words = spec.amountInWords !== null && spec.amountInWords !== undefined ? amountInWords(spec.amountInWords, spec.currency) : "";
+  const escape = escapeHtml;
+
+  if (format === "receipt") {
+    const rule = `<div class="rule"></div>`;
+    return `<!doctype html><html><head><meta charset="utf-8"><title>${escape(spec.receiptTitle)} ${escape(spec.number)}</title>
+      <style>
+        @page { size: 80mm auto; margin: 3mm; }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; background: #fff; color: #000; }
+        body { width: 74mm; margin: 0 auto; padding: 4mm 1mm 6mm; font: 12px/1.35 "Consolas", "Courier New", monospace; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .center { text-align: center; }
+        .shop { font: 700 17px/1.2 Arial, sans-serif; letter-spacing: .02em; text-transform: uppercase; }
+        .small { font-size: 10.5px; }
+        .rule { border-top: 1px dashed #000; margin: 6px 0; }
+        .rule.double { border-top: 3px double #000; }
+        .title { font: 700 13px/1.3 Arial, sans-serif; letter-spacing: .12em; text-transform: uppercase; }
+        .row { display: flex; justify-content: space-between; gap: 8px; }
+        .row span:last-child { text-align: right; }
+        .item { margin: 4px 0; }
+        .item-name { font-weight: 700; }
+        .total { font: 700 15px/1.4 "Consolas", monospace; }
+        .stamp { display: inline-block; margin: 6px 0; padding: 2px 10px; border: 2px solid #000; font: 700 12px Arial, sans-serif; letter-spacing: .15em; text-transform: uppercase; }
+        .void { color: #b42318; border-color: #b42318; }
+        .words { font-size: 10.5px; font-style: italic; }
+      </style></head><body>
+      <div class="center">
+        <div class="shop">${escape(org.name)}</div>
+        ${contactLines.map((line) => `<div class="small">${escape(line)}</div>`).join("")}
+      </div>
+      ${rule}
+      <div class="center title">${escape(spec.receiptTitle)}</div>
+      ${spec.subtitle ? `<div class="center small">${escape(spec.subtitle)}</div>` : ""}
+      ${rule}
+      <div class="row"><span>${escape(spec.numberLabel)}</span><span>${escape(spec.number)}</span></div>
+      ${spec.meta.map(([label, value]) => `<div class="row"><span>${escape(label)}</span><span>${escape(value)}</span></div>`).join("")}
+      ${spec.party ? `<div class="row"><span>${escape(spec.party.label)}</span><span>${escape(spec.party.name)}</span></div>` : ""}
+      ${spec.party?.lines?.length ? `<div class="row"><span></span><span>${escape(spec.party.lines[0])}</span></div>` : ""}
+      ${rule}
+      ${
+        spec.stock
+          ? spec.stock.rows.map(([label, value]) => `<div class="row"><span>${escape(label)}</span><span>${escape(value)}</span></div>`).join("") +
+            `<div class="item"><div class="small">Reason: ${escape(spec.stock.reason)}</div></div>`
+          : spec.items
+              .map(
+                (item) => `
+          <div class="item">
+            <div class="item-name">${escape(item.name)}</div>
+            ${
+              spec.showQuantity
+                ? `<div class="row"><span>${escape(formatNumber(item.quantity))} x ${escape(plainAmount(item.unitPrice))}</span><span>${escape(plainAmount(item.amount))}</span></div>`
+                : `<div class="row"><span class="small">${escape(item.detail || "")}</span><span>${escape(plainAmount(item.amount))}</span></div>`
+            }
+          </div>`,
+              )
+              .join("")
+      }
+      ${
+        spec.totals.length
+          ? `${rule}${spec.totals
+              .map(([label, value, style]) =>
+                style === "grand"
+                  ? `<div class="rule double"></div><div class="row total"><span>${escape(label.toUpperCase())}</span><span>${escape(money(value))}</span></div><div class="rule double"></div>`
+                  : `<div class="row"><span>${escape(label)}</span><span>${escape(value < 0 ? `-${plainAmount(-value)}` : plainAmount(value))}</span></div>`,
+              )
+              .join("")}`
+          : ""
+      }
+      ${words ? `<div class="words">${escape(words)}</div>` : ""}
+      <div class="center"><span class="stamp ${spec.stamp.tone === "void" ? "void" : ""}">${escape(spec.stamp.label)}</span></div>
+      ${spec.cancelled ? `<div class="center small void">${escape(spec.cancelled)}</div>` : ""}
+      ${spec.notes ? `${rule}<div class="small">Note: ${escape(spec.notes)}</div>` : ""}
+      ${spec.terms ? `<div class="small">${escape(spec.terms)}</div>` : ""}
+      ${rule}
+      ${spec.thanks ? `<div class="center"><strong>${escape(spec.thanks)}</strong></div>` : ""}
+      <div class="center small">${escape(copyLabel)} · Printed ${escape(generated)}</div>
+      <div class="center small">Powered by LedgerFlow</div>
+    </body></html>`;
+  }
+
+  const stampClass = { paid: "paid", partial: "partial", unpaid: "unpaid", void: "void" }[spec.stamp.tone] || "paid";
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escape(spec.title)} ${escape(spec.number)}</title>
+    <style>
+      @page { size: A4; margin: 12mm; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; background: #fff; }
+      body { color: #101828; font: 12.5px/1.5 Inter, "Segoe UI", Arial, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .page { position: relative; max-width: 186mm; margin: 0 auto; padding: 8mm 0; }
+      .top { display: flex; justify-content: space-between; gap: 24px; padding-bottom: 16px; border-bottom: 3px solid #0e7c6b; }
+      .brand { display: flex; gap: 14px; }
+      .mark { width: 52px; height: 52px; flex: none; display: grid; place-items: center; border-radius: 10px; background: #0e7c6b; color: #fff; font: 700 18px Arial, sans-serif; }
+      .biz-name { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -.01em; }
+      .biz-type { color: #0e7c6b; font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+      .biz-line { color: #475467; font-size: 11.5px; }
+      .doc { text-align: right; }
+      .doc-title { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: #101828; }
+      .doc-sub { color: #667085; font-size: 11.5px; }
+      .doc-number { margin-top: 6px; font-size: 13px; }
+      .doc-number strong { font-size: 15px; }
+      .stamp { display: inline-block; margin-top: 10px; padding: 4px 14px; border: 2px solid currentColor; border-radius: 6px; font-weight: 800; font-size: 12px; letter-spacing: .18em; text-transform: uppercase; transform: rotate(-4deg); }
+      .stamp.paid { color: #067647; } .stamp.partial { color: #b54708; } .stamp.unpaid { color: #b42318; } .stamp.void { color: #b42318; }
+      .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0; margin: 18px 0; border: 1px solid #e4e7ec; border-radius: 8px; overflow: hidden; }
+      .meta div { padding: 8px 12px; border-right: 1px solid #e4e7ec; }
+      .meta div:last-child { border-right: 0; }
+      .label { display: block; color: #667085; font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+      .value { font-weight: 600; }
+      .parties { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 18px; }
+      .party { padding: 12px 14px; background: #f9fafb; border: 1px solid #e4e7ec; border-radius: 8px; }
+      .party-name { margin: 2px 0; font-size: 15px; font-weight: 700; }
+      table { width: 100%; border-collapse: collapse; }
+      .items th { padding: 9px 10px; background: #101828; color: #fff; font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-align: left; text-transform: uppercase; }
+      .items td { padding: 10px; border-bottom: 1px solid #e4e7ec; vertical-align: top; }
+      .items tr:nth-child(even) td { background: #fcfcfd; }
+      .num { text-align: right !important; white-space: nowrap; font-variant-numeric: tabular-nums; }
+      .item-detail { color: #667085; font-size: 11px; }
+      .summary { display: grid; grid-template-columns: 1fr 260px; gap: 20px; margin-top: 16px; align-items: start; }
+      .words { padding: 10px 12px; background: #f0f9f7; border-left: 3px solid #0e7c6b; border-radius: 4px; font-size: 12px; }
+      .totals td { padding: 6px 10px; }
+      .totals td:first-child { color: #475467; }
+      .totals tr.grand td { padding: 10px; background: #101828; color: #fff; font-size: 15px; font-weight: 700; }
+      .totals tr.due td { color: #b42318; font-weight: 700; }
+      .section-title { margin: 22px 0 8px; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #475467; }
+      .payments td, .payments th { padding: 7px 10px; border-bottom: 1px solid #e4e7ec; text-align: left; font-size: 11.5px; }
+      .payments th { color: #667085; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+      .stock-table td { padding: 10px 12px; border: 1px solid #e4e7ec; font-size: 14px; }
+      .stock-table td:first-child { width: 40%; color: #475467; background: #f9fafb; }
+      .notes { padding: 10px 12px; border: 1px dashed #d0d5dd; border-radius: 6px; color: #344054; }
+      .cancelled-note { margin: 12px 0; padding: 10px 12px; border: 1px solid #fecdca; background: #fef3f2; color: #b42318; border-radius: 6px; font-weight: 600; }
+      .watermark { position: absolute; top: 42%; left: 50%; transform: translate(-50%, -50%) rotate(-24deg); color: rgba(180, 35, 24, .12); font-size: 110px; font-weight: 900; letter-spacing: .1em; pointer-events: none; }
+      .signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 60px; margin-top: 56px; }
+      .signature { padding-top: 8px; border-top: 1px solid #101828; color: #475467; font-size: 11px; text-align: center; }
+      .footer { display: flex; justify-content: space-between; gap: 16px; margin-top: 28px; padding-top: 10px; border-top: 1px solid #e4e7ec; color: #667085; font-size: 10.5px; }
+      .thanks { color: #0e7c6b; font-weight: 700; font-size: 13px; }
+    </style></head><body>
+    <div class="page">
+      ${spec.cancelled && spec.stamp.tone === "void" ? `<div class="watermark">CANCELLED</div>` : ""}
+      <div class="top">
+        <div class="brand">
+          <div class="mark">${escape(initials)}</div>
+          <div>
+            <h1 class="biz-name">${escape(org.name)}</h1>
+            <div class="biz-type">${escape(org.type || "")}</div>
+            ${contactLines.map((line) => `<div class="biz-line">${escape(line)}</div>`).join("")}
+          </div>
+        </div>
+        <div class="doc">
+          <h2 class="doc-title">${escape(spec.title)}</h2>
+          ${spec.subtitle ? `<div class="doc-sub">${escape(spec.subtitle)}</div>` : ""}
+          <div class="doc-number">${escape(spec.numberLabel)} <strong>${escape(spec.number)}</strong></div>
+          <div class="stamp ${stampClass}">${escape(spec.stamp.label)}</div>
+        </div>
+      </div>
+
+      <div class="meta">
+        ${spec.meta.map(([label, value]) => `<div><span class="label">${escape(label)}</span><span class="value">${escape(value)}</span></div>`).join("")}
+      </div>
+
+      ${spec.cancelled ? `<div class="cancelled-note">${escape(spec.cancelled)}</div>` : ""}
+
+      ${
+        spec.party
+          ? `<div class="parties">
+              <div class="party">
+                <span class="label">${escape(spec.party.label)}</span>
+                <div class="party-name">${escape(spec.party.name)}</div>
+                ${spec.party.lines.map((line) => `<div class="biz-line">${escape(line)}</div>`).join("")}
+              </div>
+              <div class="party">
+                <span class="label">Issued by</span>
+                <div class="party-name">${escape(org.name)}</div>
+                ${org.businessPhone ? `<div class="biz-line">${escape(org.businessPhone)}</div>` : ""}
+                ${org.registrationNumber ? `<div class="biz-line">${escape(org.registrationNumber)}</div>` : ""}
+              </div>
+            </div>`
+          : ""
+      }
+
+      ${
+        spec.stock
+          ? `<table class="stock-table">${spec.stock.rows
+              .map(([label, value]) => `<tr><td>${escape(label)}</td><td><strong>${escape(value)}</strong></td></tr>`)
+              .join("")}<tr><td>Reason</td><td>${escape(spec.stock.reason)}</td></tr></table>`
+          : `<table class="items">
+              <thead><tr>
+                <th style="width:36px">#</th>
+                <th>Description</th>
+                ${spec.showQuantity ? `<th class="num">Qty</th><th class="num">${escape(spec.priceLabel)}</th>` : ""}
+                <th class="num">Amount (${escape(spec.currency)})</th>
+              </tr></thead>
+              <tbody>
+                ${spec.items
+                  .map(
+                    (item, index) => `<tr>
+                      <td>${index + 1}</td>
+                      <td><strong>${escape(item.name)}</strong>${item.detail ? `<div class="item-detail">${escape(item.detail)}</div>` : ""}</td>
+                      ${spec.showQuantity ? `<td class="num">${escape(formatNumber(item.quantity))}</td><td class="num">${escape(plainAmount(item.unitPrice))}</td>` : ""}
+                      <td class="num">${escape(plainAmount(item.amount))}</td>
+                    </tr>`,
+                  )
+                  .join("")}
+              </tbody>
+            </table>`
+      }
+
+      ${
+        spec.totals.length
+          ? `<div class="summary">
+              <div>
+                ${words ? `<span class="label">Amount in words</span><div class="words">${escape(words)}</div>` : ""}
+                ${spec.terms ? `<p class="biz-line">${escape(spec.terms)}</p>` : ""}
+              </div>
+              <table class="totals">
+                ${spec.totals
+                  .map(
+                    ([label, value, style]) =>
+                      `<tr class="${style || ""}"><td>${escape(label)}</td><td class="num">${escape(
+                        value < 0 ? `− ${money(-value)}` : money(value),
+                      )}</td></tr>`,
+                  )
+                  .join("")}
+              </table>
+            </div>`
+          : ""
+      }
+
+      ${
+        spec.payments.length
+          ? `<div class="section-title">Payment history</div>
+             <table class="payments"><thead><tr><th>Date</th><th>Method</th><th>Receipt / note</th><th class="num">Amount</th></tr></thead><tbody>
+             ${spec.payments
+               .map(
+                 (payment) => `<tr><td>${escape(formatDate(payment.date))}</td><td>${escape(payment.method || "—")}</td><td>${escape(
+                   [payment.receiptNumber, payment.note].filter(Boolean).join(" · ") || "—",
+                 )}</td><td class="num">${escape(money(payment.amount))}</td></tr>`,
+               )
+               .join("")}
+             </tbody></table>`
+          : ""
+      }
+
+      ${spec.notes ? `<div class="section-title">Notes</div><div class="notes">${escape(spec.notes)}</div>` : ""}
+
+      <div class="signatures">
+        ${spec.signatures.map((label) => `<div class="signature">${escape(label)}</div>`).join("")}
+      </div>
+
+      <div class="footer">
+        <span>${spec.thanks ? `<span class="thanks">${escape(spec.thanks)}</span><br>` : ""}This is a computer-generated document from ${escape(org.name)}'s records.</span>
+        <span class="num">${escape(copyLabel)} · Printed ${escape(generated)}<br>Powered by LedgerFlow</span>
+      </div>
+    </div>
+  </body></html>`;
+}
+
+function openDocument(spec) {
+  if (!spec) return;
+  activeDocument = spec;
+  editing = { kind: "view" };
+  setModalWide(true);
+  els.modalKicker.textContent = spec.numberLabel.replace(/ no\.$/, "");
+  els.modalTitle.textContent = `${spec.title} ${spec.number}`;
+  els.recordForm.innerHTML = `
+    <div class="document-toolbar">
+      <div class="segmented" role="group" aria-label="Document style">
+        <button type="button" data-document-format="a4" class="${documentFormat === "a4" ? "is-active" : ""}">A4 invoice</button>
+        <button type="button" data-document-format="receipt" class="${documentFormat === "receipt" ? "is-active" : ""}">Shop receipt (80 mm)</button>
+      </div>
+      <span class="muted-note">${
+        Number(spec.record.printCount) > 0
+          ? `Printed ${spec.record.printCount} time${spec.record.printCount === 1 ? "" : "s"} before. New prints are marked "Copy".`
+          : `The first print is marked "Original".`
+      }</span>
+    </div>
+    <div class="document-preview ${documentFormat}">
+      <iframe id="documentFrame" title="${escapeHtml(spec.title)} preview"></iframe>
+    </div>
+    <div class="form-actions">
+      <button class="button ghost" id="cancelFormBtn" type="button">Close</button>
+      <button class="button primary" type="button" data-print-document>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 9V3h10v6M7 17H4v-7h16v7h-3M7 14h10v7H7z" /></svg>
+        Print
+      </button>
+    </div>
+  `;
+  byId("documentFrame").srcdoc = documentHtml(spec, documentFormat);
+  els.modalBackdrop.hidden = false;
+}
+
+function setDocumentFormat(format) {
+  documentFormat = format === "receipt" ? "receipt" : "a4";
+  try {
+    localStorage.setItem(DOCUMENT_FORMAT_KEY, documentFormat);
+  } catch (error) {
+    console.warn("Could not remember document format", error);
+  }
+  if (activeDocument) openDocument(activeDocument);
+}
+
+function printActiveDocument() {
+  const frame = byId("documentFrame");
+  if (!frame || !activeDocument) return;
+  markDocumentPrinted(activeDocument.record);
+  frame.contentWindow.focus();
+  frame.contentWindow.print();
+  // The next print of this record is a copy.
+  window.setTimeout(() => {
+    if (activeDocument && byId("documentFrame")) openDocument(activeDocument);
+  }, 300);
+}
+
+function openDocumentFor(reference) {
+  const [kind, id, extra] = reference.split(":");
+  if (kind === "sale" || kind === "purchase") {
+    const trade = findTrade(kind, id);
+    if (trade && can(TRADE[kind].area, "view")) openDocument(tradeDocument(kind, trade));
+    return;
+  }
+  if (kind === "finance") {
+    const entry = state.finance.find((record) => record.id === id);
+    if (!entry) return;
+    if (entry.sourceType) {
+      openDocumentFor(`${entry.sourceType}:${entry.sourceId}`);
+      return;
+    }
+    if (can("finance", "view")) openDocument(financeDocument(entry));
+    return;
+  }
+  if (kind === "payment") {
+    const entry = state.finance.find((record) => record.id === id);
+    if (entry && (can("finance", "view") || (entry.sourceType && can(TRADE[entry.sourceType].area, "view")))) {
+      openDocument(paymentDocument(entry, extra));
+    }
+    return;
+  }
+  if (kind === "movement") {
+    const move = state.stockMovements.find((record) => record.id === id);
+    if (move && can("inventory", "view")) openDocument(movementDocument(move));
+  }
+}
+
+/* ----- Sales and purchases lists ----- */
+
+function tradeItemsSummary(trade) {
+  if (!trade.lines.length) return "—";
+  const [first, ...rest] = trade.lines;
+  return `${first.name} × ${formatNumber(first.quantity)}${rest.length ? ` +${rest.length} more` : ""}`;
+}
+
+function inPeriod(date, period) {
+  const value = String(date || "");
+  const month = todayIso().slice(0, 7);
+  if (period === "this-month") return value.startsWith(month);
+  if (period === "last-month") return value.startsWith(shiftMonth(month, -1));
+  if (period === "this-year") return value.startsWith(month.slice(0, 4));
+  return true;
+}
+
+function renderTrades(kind) {
+  const config = TRADE[kind];
+  const area = config.area;
+  const tab = activeTab(area);
+  const query = els.globalSearch.value.trim().toLowerCase();
+  const period = tradeFilters[area];
+  byId(`${area}PeriodFilter`).value = period;
+
+  const rows = state[config.list]
+    .filter((trade) => {
+      if (tab === "cancelled" ? trade.status !== "Cancelled" : trade.status === "Cancelled") return false;
+      if (tab === "unpaid" && tradeBalance(trade) <= 0) return false;
+      if (!inPeriod(trade.date, period)) return false;
+      if (!query) return true;
+      const text = [trade.number, trade.partyName, trade.partyPhone, trade.reference, trade.notes, ...trade.lines.map((line) => `${line.name} ${line.sku}`)]
+        .join(" ")
+        .toLowerCase();
+      return text.includes(query);
+    })
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.number).localeCompare(String(a.number)));
+
+  byId(`${area}Head`).innerHTML = `
+    <tr>
+      <th>${config.noun} no.</th>
+      <th>${config.party}</th>
+      <th>Items</th>
+      <th class="num">Total</th>
+      <th class="num">Paid</th>
+      <th class="num">Balance</th>
+      <th>Status</th>
+      <th></th>
+    </tr>
+  `;
+  byId(`${area}Table`).innerHTML = rows.length
+    ? rows
+        .map((trade) => {
+          const status = tradeStatus(trade);
+          const balance = tradeBalance(trade);
+          const entry = state.finance.find((record) => record.id === trade.financeId);
+          const actions = [
+            `<button type="button" data-view-trade="${kind}:${escapeHtml(trade.id)}">View</button>`,
+            `<button type="button" data-document="${kind}:${escapeHtml(trade.id)}">Invoice</button>`,
+            balance > 0 && canTakePayment(entry)
+              ? `<button type="button" class="accent" data-mark-paid="${escapeHtml(entry.id)}">${kind === "sale" ? "Receive" : "Pay"}</button>`
+              : "",
+          ].join("");
+          return `
+          <tr class="is-clickable" data-view-trade-row="${kind}:${escapeHtml(trade.id)}">
+            <td>${titleCell(trade.number, formatDate(trade.date))}</td>
+            <td>${titleCell(trade.partyName || "—", trade.partyPhone || (trade.walkIn ? "No details recorded" : ""))}</td>
+            <td>${titleCell(tradeItemsSummary(trade), `${formatNumber(trade.lines.reduce((sum, line) => sum + line.quantity, 0))} units`)}</td>
+            <td class="num"><strong>${escapeHtml(formatCurrency(trade.total, trade.currency))}</strong></td>
+            <td class="num">${escapeHtml(formatCurrency(trade.status === "Cancelled" ? 0 : trade.amountPaid, trade.currency))}</td>
+            <td class="num"><span class="${balance > 0 ? "negative-text" : ""}">${escapeHtml(formatCurrency(balance, trade.currency))}</span></td>
+            <td>${badge(status.label, status.tone)}</td>
+            <td><div class="row-actions">${actions}</div></td>
+          </tr>
+        `;
+        })
+        .join("")
+    : `<tr><td colspan="8"><div class="empty-state">${
+        state[config.list].length
+          ? "Nothing matches this view."
+          : kind === "sale"
+            ? "No sales recorded yet. Use New sale each time you sell something."
+            : "No purchases recorded yet. Use New purchase whenever stock arrives from a supplier."
+      }</div></td></tr>`;
+
+  const live = rows.filter((trade) => trade.status !== "Cancelled");
+  byId(`${area}TableSummary`).innerHTML = `<strong>${formatNumber(rows.length)}</strong> ${
+    kind === "sale" ? "sales" : "purchases"
+  }${
+    live.length
+      ? ` · Total <strong>${escapeHtml(formatMoneyTotals(sumByCurrency(live, (trade) => trade.total)))}</strong> · Unpaid <strong>${escapeHtml(
+          formatMoneyTotals(sumByCurrency(live, tradeBalance)),
+        )}</strong>`
+      : ""
+  }`;
+}
+
+function renderStockHistory() {
+  const query = els.globalSearch.value.trim().toLowerCase();
+  const type = tradeFilters.stockType;
+  byId("stockTypeFilter").value = type;
+  const moves = state.stockMovements.filter((move) => {
+    if (type === "sales" && !["Sale", "Sale cancelled"].includes(move.type)) return false;
+    if (type === "purchases" && !["Purchase", "Purchase cancelled"].includes(move.type)) return false;
+    if (type === "adjustments" && move.type !== "Adjustment") return false;
+    if (type === "opening" && !String(move.type).startsWith("Opening") && move.type !== "Import update") return false;
+    if (!query) return true;
+    return [move.itemName, move.sku, move.reference, move.party, move.reason, move.by].join(" ").toLowerCase().includes(query);
+  });
+  byId("stockHistoryWrap").innerHTML = movementTableHtml(moves);
+  byId("stockHistorySummary").innerHTML = `<strong>${formatNumber(moves.length)}</strong> stock changes`;
+}
+
+/* ----- Sales and stock reports ----- */
+
+function renderTradeReports() {
+  const panel = byId("tradeReportPanel");
+  const show = can("sales", "view") || can("purchases", "view");
+  panel.hidden = !show;
+  if (!show) return;
+  const period = tradeFilters.reportPeriod;
+  byId("reportPeriodSelect").value = period;
+  const sales = can("sales", "view") ? state.sales.filter((trade) => trade.status !== "Cancelled" && inPeriod(trade.date, period)) : [];
+  const purchases = can("purchases", "view")
+    ? state.purchases.filter((trade) => trade.status !== "Cancelled" && inPeriod(trade.date, period))
+    : [];
+  const currencies = [...new Set([...sales, ...purchases].map((trade) => trade.currency))];
+  if (!currencies.includes(tradeFilters.reportCurrency)) {
+    tradeFilters.reportCurrency = currencies.includes(orgCurrency()) ? orgCurrency() : currencies[0] || orgCurrency();
+  }
+  const currency = tradeFilters.reportCurrency;
+  byId("reportCurrencyControl").hidden = currencies.length < 2;
+  byId("reportCurrencySelect").innerHTML = currencies
+    .map((code) => `<option value="${code}" ${code === currency ? "selected" : ""}>${code}</option>`)
+    .join("");
+  const money = (value) => formatCurrency(value, currency);
+  const salesIn = sales.filter((trade) => trade.currency === currency);
+  const purchasesIn = purchases.filter((trade) => trade.currency === currency);
+  const sensitive = canAccess("sensitiveNumbers");
+
+  const itemStats = {};
+  let costOfGoods = 0;
+  let linesWithoutCost = 0;
+  salesIn.forEach((trade) => {
+    const share = trade.subtotal ? trade.total / trade.subtotal : 1;
+    trade.lines.forEach((line) => {
+      const key = line.itemId || `custom:${line.name}`;
+      const stats = (itemStats[key] ||= { name: line.name, quantity: 0, revenue: 0, cost: 0, costKnown: true });
+      const revenue = line.lineTotal * share;
+      stats.quantity += line.quantity;
+      stats.revenue += revenue;
+      if (!line.custom) {
+        if (line.unitCost === "") {
+          stats.costKnown = false;
+          linesWithoutCost += 1;
+        } else {
+          stats.cost += line.quantity * parseMoney(line.unitCost);
+          costOfGoods += line.quantity * parseMoney(line.unitCost);
+        }
+      }
+    });
+  });
+  const revenue = round2(salesIn.reduce((sum, trade) => sum + trade.total, 0));
+  const unitsSold = salesIn.reduce((sum, trade) => sum + trade.lines.reduce((lines, line) => lines + line.quantity, 0), 0);
+  const kpis = [];
+  if (can("sales", "view")) {
+    kpis.push(
+      kpiCard({ label: "Sales", value: formatNumber(salesIn.length), icon: "income", tone: "income", note: `${formatNumber(unitsSold)} units sold` }),
+      kpiCard({
+        label: "Sales revenue",
+        value: money(revenue),
+        icon: "wallet",
+        note: salesIn.length ? `Average sale ${money(revenue / salesIn.length)}` : "",
+      }),
+    );
+    if (sensitive) {
+      kpis.push(
+        kpiCard({
+          label: "Gross profit",
+          value: money(round2(revenue - costOfGoods)),
+          icon: "profit",
+          tone: "profit",
+          negative: revenue - costOfGoods < 0,
+          note: linesWithoutCost ? `${linesWithoutCost} sold lines had no cost recorded` : revenue ? `${Math.round(((revenue - costOfGoods) / revenue) * 100)}% margin` : "",
+        }),
+      );
+    }
+    kpis.push(
+      kpiCard({
+        label: "Still owed by customers",
+        value: money(salesIn.reduce((sum, trade) => sum + tradeBalance(trade), 0)),
+        icon: "inbox",
+        tone: "alert",
+      }),
+    );
+  }
+  if (can("purchases", "view")) {
+    kpis.push(
+      kpiCard({
+        label: "Purchases",
+        value: money(purchasesIn.reduce((sum, trade) => sum + trade.total, 0)),
+        icon: "expense",
+        tone: "expense",
+        note: `${purchasesIn.length} purchases · ${money(purchasesIn.reduce((sum, trade) => sum + tradeBalance(trade), 0))} unpaid`,
+      }),
+    );
+  }
+  byId("tradeReportKpis").innerHTML = kpis.join("");
+
+  const tableOrEmpty = (headers, rows, empty) =>
+    rows.length
+      ? `<table class="data-table compact"><thead><tr>${headers
+          .map((header, index) => `<th class="${index ? "num" : ""}">${header}</th>`)
+          .join("")}</tr></thead><tbody>${rows
+          .map((row) => `<tr>${row.map((cell, index) => `<td class="${index ? "num" : ""}">${cell}</td>`).join("")}</tr>`)
+          .join("")}</tbody></table>`
+      : `<div class="empty-state">${empty}</div>`;
+
+  byId("topItemsReport").innerHTML = tableOrEmpty(
+    ["Item", "Qty sold", "Revenue", ...(sensitive ? ["Gross profit"] : [])],
+    Object.values(itemStats)
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 10)
+      .map((stats) => [
+        escapeHtml(stats.name),
+        formatNumber(stats.quantity),
+        escapeHtml(money(stats.revenue)),
+        ...(sensitive ? [stats.costKnown ? escapeHtml(money(stats.revenue - stats.cost)) : "No cost"] : []),
+      ]),
+    "No sales in this period.",
+  );
+
+  const customerStats = {};
+  salesIn.forEach((trade) => {
+    const key = trade.contactId || (trade.walkIn ? "walk-in" : trade.partyName.toLowerCase());
+    const stats = (customerStats[key] ||= { name: trade.walkIn ? "Walk-in customers" : trade.partyName, count: 0, total: 0, owed: 0 });
+    stats.count += 1;
+    stats.total += trade.total;
+    stats.owed += tradeBalance(trade);
+  });
+  byId("topCustomersReport").innerHTML = tableOrEmpty(
+    ["Customer", "Sales", "Total", "Still owed"],
+    Object.values(customerStats)
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 10)
+      .map((stats) => [escapeHtml(stats.name), formatNumber(stats.count), escapeHtml(money(stats.total)), escapeHtml(money(stats.owed))]),
+    "No sales in this period.",
+  );
+
+  const supplierStats = {};
+  purchasesIn.forEach((trade) => {
+    const key = trade.contactId || trade.partyName.toLowerCase();
+    const stats = (supplierStats[key] ||= { name: trade.partyName, count: 0, total: 0, owed: 0 });
+    stats.count += 1;
+    stats.total += trade.total;
+    stats.owed += tradeBalance(trade);
+  });
+  byId("suppliersReport").innerHTML = tableOrEmpty(
+    ["Supplier", "Purchases", "Total", "You owe"],
+    Object.values(supplierStats)
+      .sort((a, b) => b.total - a.total)
+      .map((stats) => [escapeHtml(stats.name), formatNumber(stats.count), escapeHtml(money(stats.total)), escapeHtml(money(stats.owed))]),
+    "No purchases in this period.",
+  );
+
+  const movementStats = {};
+  state.stockMovements
+    .filter((move) => inPeriod(move.date, period))
+    .forEach((move) => {
+      const stats = (movementStats[move.type] ||= { in: 0, out: 0, count: 0 });
+      stats.count += 1;
+      if (move.change > 0) stats.in += move.change;
+      else stats.out += Math.abs(move.change);
+    });
+  byId("movementReport").innerHTML = tableOrEmpty(
+    ["Change type", "Entries", "Units in", "Units out"],
+    Object.entries(movementStats).map(([type, stats]) => [movementBadge(type), formatNumber(stats.count), formatNumber(stats.in), formatNumber(stats.out)]),
+    "No stock changes in this period.",
+  );
+}
+
+/* ----- Sample transactions ----- */
+
+function seedSampleTrades() {
+  const items = state.inventory.filter((item) => parseMoney(item.quantity) > 0 && !isBlank(item.sellPrice));
+  if (!items.length) return 0;
+  const currency = recordCurrency(items[0]);
+  const usable = items.filter((item) => recordCurrency(item) === currency);
+  const customers = state.contacts.filter((contact) => contact.type === "Customer");
+  const suppliers = state.contacts.filter((contact) => contact.type === "Supplier");
+  const pick = (index) => usable[index % usable.length];
+  const due = (days) => daysAgoIso(-days);
+  let created = 0;
+  const make = (kind, draft) => {
+    const result = createTrade(kind, {
+      contactId: "",
+      partyName: "",
+      partyPhone: "",
+      saveContact: false,
+      currency,
+      discount: "",
+      payment: "paid",
+      amountPaid: "",
+      method: "Cash",
+      dueDate: "",
+      reference: "",
+      notes: "",
+      ...draft,
+      lines: draft.lines
+        .filter(([item]) => item)
+        .map(([item, quantity, factor = 1]) => ({
+          key: makeId("line"),
+          itemId: item.id,
+          custom: false,
+          description: "",
+          quantity: kind === "sale" ? Math.max(1, Math.min(quantity, Math.floor(parseMoney(item.quantity)))) : quantity,
+          unitPrice: round2(parseMoney(kind === "sale" ? item.sellPrice : item.unitCost || item.sellPrice * 0.8) * factor),
+          priceTouched: true,
+        })),
+    });
+    if (!result.error) created += 1;
+  };
+
+  const restockQuantity = (item) => (parseMoney(item.quantity) <= 2 ? 1 : 20);
+  const lowItem = usable.find((item) => isLowStock(item)) || pick(1);
+  if (suppliers[0]) {
+    make("purchase", {
+      date: daysAgoIso(12),
+      contactId: suppliers[0].id,
+      lines: [[lowItem, restockQuantity(lowItem)]],
+      payment: "paid",
+      method: "Bank transfer",
+      reference: "INV-40912",
+    });
+    make("purchase", {
+      date: daysAgoIso(4),
+      contactId: (suppliers[1] || suppliers[0]).id,
+      lines: [[pick(2), restockQuantity(pick(2))]],
+      payment: "unpaid",
+      dueDate: due(20),
+      reference: "INV-41177",
+    });
+  }
+  make("sale", { date: daysAgoIso(14), contactId: customers[0]?.id || "", lines: [[pick(1), 2]], payment: "paid", method: "Card" });
+  make("sale", { date: daysAgoIso(9), partyName: "Ali (walk-in)", lines: [[pick(4), 1, 0.95]], payment: "paid", method: "Mobile wallet" });
+  make("sale", {
+    date: daysAgoIso(6),
+    contactId: (customers[1] || customers[0])?.id || "",
+    partyName: customers.length ? "" : "Credit customer",
+    lines: [[pick(3), 1], [pick(0), 1]],
+    payment: "unpaid",
+    dueDate: due(-2),
+  });
+  make("sale", {
+    date: daysAgoIso(3),
+    contactId: customers[0]?.id || "",
+    partyName: customers.length ? "" : "Regular customer",
+    lines: [[pick(2), 1]],
+    payment: "partial",
+    amountPaid: round2(parseMoney(pick(2).sellPrice) / 2),
+    method: "Bank transfer",
+    dueDate: due(10),
+  });
+  make("sale", { date: daysAgoIso(1), lines: [[pick(0), 2], [pick(1), 1]], payment: "paid", method: "Cash" });
+  return created;
 }
 
 /* ---------- Reports ---------- */
@@ -5965,7 +8606,7 @@ function renderReports() {
     ]);
   }
   if (can("finance", "view")) {
-    lines.push(["Unpaid transactions", `${alerts.unpaid} transaction${alerts.unpaid === 1 ? " is" : "s are"} pending or overdue.`]);
+    lines.push(["Overdue payments", `${alerts.unpaid} transaction${alerts.unpaid === 1 ? " is" : "s are"} past the due date.`]);
   }
   lines.push([
     "Data completeness",
@@ -6015,9 +8656,7 @@ function loadSampleBusiness(type) {
     : `Load the ${type} sample? Module names and fields will be arranged for a ${type}.`;
   if (!window.confirm(confirmText)) return;
 
-  MODULES.forEach((module) => {
-    state[module] = [];
-  });
+  resetTransactionRecords();
   state.activity = [];
   state.dataSources = defaultDataSources();
   importSession = null;
@@ -6079,6 +8718,10 @@ function loadSampleBusiness(type) {
       count += 1;
     });
 
+  // Opening stock a month back, then realistic sales and purchases that move it.
+  state.inventory.forEach((item) => logOpeningStock(item, "Opening stock", `Sample: ${type}`, daysAgoIso(30)));
+  count += seedSampleTrades();
+
   state.organization.sampleLoaded = type;
   delete state.organization.hideGettingStarted;
   const manual = state.dataSources.find((source) => source.id === "source-manual");
@@ -6094,14 +8737,22 @@ function loadSampleBusiness(type) {
   showToast(`${type} sample loaded`);
 }
 
+function resetTransactionRecords() {
+  MODULES.forEach((module) => {
+    state[module] = [];
+  });
+  state.sales = [];
+  state.purchases = [];
+  state.stockMovements = [];
+  state.counters = { ...state.counters, sale: 0, purchase: 0 };
+}
+
 function clearSampleData() {
   const org = state.organization;
   if (!org.sampleLoaded) return;
   if (!window.confirm("Remove all sample records and return to your empty business?")) return;
   const type = org.typeBeforeSample || org.type;
-  MODULES.forEach((module) => {
-    state[module] = [];
-  });
+  resetTransactionRecords();
   state.activity = [];
   state.dataSources = defaultDataSources();
   importSession = null;
@@ -6117,11 +8768,9 @@ function clearSampleData() {
 function clearAllRecords({ confirmText } = {}) {
   const message =
     confirmText ||
-    "Delete ALL records (items, transactions, contacts, employees, assets)? Roles, fields, and the owner login stay.";
+    "Delete ALL records (items, sales, purchases, stock history, transactions, contacts, employees, assets)? Roles, fields, and the owner login stay.";
   if (!window.confirm(message)) return;
-  MODULES.forEach((module) => {
-    state[module] = [];
-  });
+  resetTransactionRecords();
   state.dataSources = defaultDataSources();
   importSession = null;
   delete state.organization.sampleLoaded;
@@ -6155,6 +8804,81 @@ els.navList.addEventListener("click", (event) => {
 document.addEventListener("click", (event) => {
   const target = event.target;
   const split = (element, attribute) => element.getAttribute(attribute).split(":");
+
+  const newTrade = target.closest("[data-new-trade]");
+  if (newTrade) {
+    openTradeForm(newTrade.dataset.newTrade);
+    return;
+  }
+  const sellItem = target.closest("[data-sell-item]");
+  if (sellItem) {
+    openTradeForm("sale", { itemId: sellItem.dataset.sellItem });
+    return;
+  }
+  const adjustStock = target.closest("[data-adjust-stock]");
+  if (adjustStock) {
+    openAdjustStock(adjustStock.dataset.adjustStock);
+    return;
+  }
+  const stockHistory = target.closest("[data-stock-history]");
+  if (stockHistory) {
+    openStockHistory(stockHistory.dataset.stockHistory);
+    return;
+  }
+  const contactHistory = target.closest("[data-contact-history]");
+  if (contactHistory) {
+    openContactHistory(contactHistory.dataset.contactHistory);
+    return;
+  }
+  const documentButton = target.closest("[data-document]");
+  if (documentButton) {
+    openDocumentFor(documentButton.dataset.document);
+    return;
+  }
+  const formatButton = target.closest("[data-document-format]");
+  if (formatButton) {
+    setDocumentFormat(formatButton.dataset.documentFormat);
+    return;
+  }
+  if (target.closest("[data-print-document]")) {
+    printActiveDocument();
+    return;
+  }
+  const cancelTrade = target.closest("[data-cancel-trade]");
+  if (cancelTrade) {
+    const [kind, id] = split(cancelTrade, "data-cancel-trade");
+    openCancelTrade(kind, id);
+    return;
+  }
+  const viewTrade = target.closest("[data-view-trade]");
+  if (viewTrade) {
+    const [kind, id] = split(viewTrade, "data-view-trade");
+    openTradeDetails(kind, id);
+    return;
+  }
+  const addLine = target.closest("[data-trade-add-line]");
+  if (addLine && TRADE[editing?.kind]) {
+    captureTradeForm();
+    editing.draft.lines.push(newTradeLine(editing.kind));
+    renderTradeForm();
+    els.recordForm.querySelector(".trade-line:last-child select")?.focus();
+    return;
+  }
+  const removeLine = target.closest("[data-trade-remove-line]");
+  if (removeLine && TRADE[editing?.kind]) {
+    captureTradeForm();
+    if (editing.draft.lines.length > 1) {
+      editing.draft.lines = editing.draft.lines.filter((line) => line.key !== removeLine.dataset.tradeRemoveLine);
+    }
+    renderTradeForm();
+    return;
+  }
+  const tradeRow = target.closest("[data-view-trade-row]");
+  if (tradeRow && !target.closest("button")) {
+    const [kind, id] = split(tradeRow, "data-view-trade-row");
+    openTradeDetails(kind, id);
+    return;
+  }
 
   const tabButton = target.closest("[data-tab]");
   if (tabButton) {
@@ -6292,6 +9016,24 @@ document.addEventListener("click", (event) => {
 
 document.addEventListener("change", (event) => {
   const target = event.target;
+  if (TRADE[editing?.kind] && target.closest("#recordForm")) {
+    captureTradeForm();
+    if (target.matches("[data-trade-refresh]")) renderTradeForm();
+    else updateTradeSummary();
+    return;
+  }
+  const tradeFilterIds = {
+    salesPeriodFilter: "sales",
+    purchasesPeriodFilter: "purchases",
+    stockTypeFilter: "stockType",
+    reportPeriodSelect: "reportPeriod",
+    reportCurrencySelect: "reportCurrency",
+  };
+  if (tradeFilterIds[target.id]) {
+    tradeFilters[tradeFilterIds[target.id]] = target.value;
+    render();
+    return;
+  }
   if (target.id === "financeYearSelect") {
     financeViewState.year = Number(target.value);
     render();
@@ -6332,6 +9074,10 @@ document.addEventListener("change", (event) => {
 
 document.addEventListener("input", (event) => {
   if (event.target.matches("[data-fill]")) handleImportFill(event.target);
+  if (TRADE[editing?.kind] && event.target.closest("#recordForm") && !event.target.matches("select, [type=radio], [type=checkbox]")) {
+    captureTradeForm();
+    updateTradeSummary();
+  }
 });
 
 els.globalSearch.addEventListener("input", render);
